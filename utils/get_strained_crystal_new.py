@@ -4,15 +4,16 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 import dgl
 import pandas as pd
 import numpy as np
+from scipy.spatial.transform import Rotation as R3
 import os
 
 import torch
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
 
-from etc import *
-from get_edges import Edges
-from scipy.spatial.transform import Rotation as R3
+from utils.etc import *
+from utils.get_edges import Edges
+
 
 class MPtoGraph(Dataset):
     def __init__(self, df, target,
