@@ -540,4 +540,14 @@ def ij_labels(ij, bravais, dtype='numpy'):
         return labels
     elif dtype == 'torch':
         return torch.tensor(labels).float()
+
     
+def rand_ij_index(gt_label):
+    gt_label = gt_label.cpu()
+    ns = gt_label.sum(-1) 
+    mask = torch.zeros(gt_label.shape)
+    for m, n in enumerate(ns):
+        rand_idx = torch.multinomial(torch.tensor([1/n]*int(n)), 1)
+        mask_idx = torch.where(gt_label[m] == 1)[0][rand_idx]
+        mask[m, mask_idx] = 1
+    return mask.float()
