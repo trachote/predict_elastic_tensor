@@ -32,7 +32,7 @@ class Runner:
                                                      T_mult=sch.T_mult,
                                                      eta_min=sch.eta_min)
 
-        self.criterion_reg = loss_fn(task_loss)
+        self.criterion_reg = loss_fn(cfg.model.task_loss)
         self.criterion_class = loss_fn('bce_loss')
         self.weigth_class_loss = cfg.model.weigth_class_loss
 
