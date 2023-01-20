@@ -27,19 +27,21 @@ def get_loaders(df_train, df_val, max_edge, bs, graph_params, shuffle=True):
         df2 = df_val[(df_val['spacegroup.crystal_system'] == system) & (df_val['edge_size'] <= max_edge)]
         print(f'crystal system: {system}, train/val: {len(df1)}/{len(df2)}')
        
-        train_s = MPtoGraph(df1, **graph_params.train)
-        print('\ttrain pass') 
-         
-        val_s = MPtoGraph(df2, **graph_params.val)
-        print('\tval pass') 
+        if len(df1) > 0:
+            train_s = MPtoGraph(df1, **graph_params.train)
+            train_s.set_mode(ijdict_symmetric('train')[system])
+            train_set.append(train_s)  
+            print('\ttrain pass') 
+        
+        if len(df2) > 0:
+            val_s = MPtoGraph(df2, **graph_params.val)
+            val_s.set_mode(ijdict_symmetric('val')[system])
+            val_set.append(val_s)
+            print('\tval pass') 
 
-        train_s.set_mode(ijdict_symmetric('train')[system])
-        val_s.set_mode(ijdict_symmetric('val')[system])
-   
         mean += train_s.mean * len(train_s)
         std += train_s.std * len(train_s)
-        train_set.append(train_s), val_set.append(val_s)
-   
+        
     train_size, val_size = sum([len(n) for n in train_set]), sum([len(n) for n in val_set])
     mean = mean / train_size 
     std = std / train_size 
