@@ -5,7 +5,7 @@ The code is used to train and/or predict a strain energy density in a unit of eV
 
 # SE(3)-Transformers
 
-The SE(3)-Transformers code has been adopted from [SE(3)-Transformers: 3D Roto-Translation Equivariant Attention Networks](https://arxiv.org/abs/2006.10503). 
+The SE(3)-Transformers code has been adopted with some modifications from [SE(3)-Transformers: 3D Roto-Translation Equivariant Attention Networks](https://arxiv.org/abs/2006.10503). 
 
 Please cite them as
 ```
