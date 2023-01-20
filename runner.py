@@ -115,7 +115,7 @@ class Runner:
                 ng = y.shape[0]
 
                 gt_label = ij_labels(ij, systems, 'torch').to(self.device)
-                ij_index = ij_labels(ij, ['triclinic'] * bs * 2, 'torch').to(self.device)
+                ij_index = ij_labels(ij, ['triclinic'] * self.bs * 2, 'torch').to(self.device)
                 assert gt_label.shape == ij_index.shape
 
                 pred, label = model(g, ij_index, gt_label, teacher_forcing)
