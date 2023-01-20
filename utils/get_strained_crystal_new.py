@@ -18,21 +18,15 @@ from utils.get_edges import Edges
 class MPtoGraph(Dataset):
     def __init__(self, df, target,
                  shuffle=False,
-                 strain=20,
+                 strain=2,
                  weight='ones',
-                 radius=10.,
-                 feat='Z',
                  one_hot_size=95,
-                 extra_feat=False,
                  atom_feat=None,
-                 conventional_cell=False,
-                 combining_graph=False,
-                 fractional_coords=False,
+                 conventional_cell=True,
                  recenter=True,
-                 add_rim=False,
                  edge_style='cell_radius',
                  graph_object='dgl',
-                 train_energy=False,
+                 train_energy=True,
                  normalize_target=True,
                  rotations=None,
                  **kwargs
@@ -41,22 +35,15 @@ class MPtoGraph(Dataset):
         self.df = df
         self.target = target
         self.weight = weight
-        self.radius = radius
-        self.feat = feat
         self.strain = strain
         self.eij = get_epsilon(strain)
-        #self.eijm = get_epsilon(-1*strain)
         self.e_vector = strain_vector(strain)
         self.con_cell = conventional_cell
         self.one_hot_size = one_hot_size
-        self.combining_graph = combining_graph
-        self.fractional_coords = fractional_coords
         self.recenter = recenter
-        self.add_rim = add_rim
         self.edge_style = edge_style
         self.graph_object = graph_object
         self.train_energy = train_energy
-        self.extra_feat = extra_feat
         self.atom_feat = atom_feat
         self.normalize_target = normalize_target
         self.rotations = rotations

@@ -54,30 +54,6 @@ def get_epsilon(strain):
     return exy
 
 
-def add_rimming_atoms(struct):
-    assert isinstance(struct, Structure)
-    struct = struct.copy()
-    sites = struct.sites
-    elems = [site.specie.symbol for site in sites]
-    coords = np.array([item.frac_coords for item in sites])
-    #n, x = np.where(np.isclose(coord, 0.))
-    
-    for n, coord in enumerate(coords):
-        idx = np.where(np.isclose(coord, 0.))
-        if len(idx[0]) == 0:
-            continue
-        if len(idx[0]) == 3:
-            struct.append(elems[n], [1., 0., 1.])
-        
-        for i in range(len(idx[0])):
-            new_co = coord.copy()
-            for j in range(i, len(idx[0])):
-                new_co[idx[0][j]] += 1.
-                struct.append(elems[n], new_co)
-    
-    return struct
-
-
 def data_alignment(struct, y):
         lat = struct.lattice.matrix
         bravias = SpacegroupAnalyzer(struct).get_crystal_system()
@@ -111,46 +87,6 @@ def data_alignment(struct, y):
         
         else:
             return y
-
-        
-def get_spdf_feat(struct, n_levels=3, l_max=4, J_max=None, split_n_levels=True):
-    assert isinstance(struct, Structure)
-    n_atoms = len(struct.sites)
-
-    if J_max != None:
-        l_max = Jmax
-    features = torch.zeros((n_atoms, n_levels, l_max ** 2 + 1, 1))
-    for i, elem in enumerate(struct.species):
-        e_config = list(reversed(elem.full_electronic_structure))
-        n_max, _, _ = e_config[0]
-        for n, l, n_e in e_config:
-            if n_max - n >= n_levels:
-                break
-
-            if l == 's':
-                features[i][n_max - n][0][0] += n_e
-
-            if l == 'p':
-                for j in range(n_e):
-                    features[i][n_max - n][1+(j%3)][0] += 1
-
-            if l == 'd': # for low spin configuration
-                if n_e <= 6:
-                    for j in range(n_e):
-                        features[i][n_max - n][4+(j%3)][0] += 1
-                else:
-                    features[i][n_max - n][4:7][0] = 2.
-
-                    for j in range(n_e-6):
-                        features[i][n_max - n][7+(j%2)][0] += 1
-
-            if l == 'f': # assume that f-orbital is always fully occupied.
-                features[i][n_max - n][9:17][0] = 2.
-
-    if not split_n_levels:
-        features = torch.sum(features, axis=1)
-
-    return features
         
         
 def pg_vec_from_sg(space_group_number, vector=True):

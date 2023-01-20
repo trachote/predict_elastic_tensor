@@ -1,0 +1,50 @@
+model:
+  max_edge: 500
+  batch_size: 16
+  num_teach_forcing: 10
+  num_epochs: 501
+
+  graph_params:
+    train:
+      target: 'elasticity.elastic_tensor'
+      strain: 2
+      conventional_cell: True
+      recenter: True
+      atom_feats: ['mass', 'X', 'polar', 'radius']
+      train_energy: True
+      edge_style: 'cell_radius'
+      normalize: True
+      rotations: 'random'
+    val:
+      target: ${model.graph_params.train.target}
+      strain: ${model.graph_params.train.strain}
+      conventional_cell: ${model.graph_params.train.conventional_cell}
+      recenter: ${model.graph_params.train.recenter}
+      atom_feats: ${model.graph_params.train.atom_feats}
+      train_energy: ${model.graph_params.train.train_energy}
+      edge_style: ${model.graph_params.train.edge_style}
+      normalize: ${model.graph_params.train.normalize}
+      rotations: None
+
+  conv:
+    num_layers: 4
+    atom_feat_size: 4
+    num_channels: 16
+    num_nlayers: 1
+    num_degrees: 4
+    num_bonds: 1
+    div: 4
+    num_heads: 2
+    pooling: 'max'
+    embed_dim: 512
+    radial_dim: 128
+
+  otim:
+    optimizer:
+      lr: 1e-4
+      weight_decay: 0.
+
+    scheduler:
+      T_0: ${model.num_epochs}
+      T_mult: 1
+      eta_min: 1e-8

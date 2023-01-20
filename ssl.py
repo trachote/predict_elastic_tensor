@@ -15,7 +15,7 @@ from equivariant_attention.fibers import Fiber
 class SE3Transformer(nn.Module):
     """SE(3) equivariant GCN with attention"""
     def __init__(self, num_layers: int, 
-                 atom_feature_size: int, 
+                 atom_feat_size: int,
                  num_channels: int, 
                  num_nlayers: int=1,
                  num_degrees: int=4, 
@@ -23,8 +23,8 @@ class SE3Transformer(nn.Module):
                  div: float=4, 
                  pooling: str='avg', 
                  n_heads: int=4, 
-                 mid_dim: int=32, 
-                 embed_feat=None, 
+                 radial_dim: int=32, 
+                 embed_dim=None, 
                  **kwargs):
         super().__init__()
         # Build the network
@@ -33,15 +33,15 @@ class SE3Transformer(nn.Module):
         self.num_channels = num_channels
         self.num_degrees = num_degrees
         self.edge_dim = edge_dim
-        self.mid_dim = mid_dim
+        self.radial_dim = radial_dim
         self.div = div
         self.pooling = pooling
         self.n_heads = n_heads
-        self.embed_feat = embed_feat
-        if embed_feat is not None:
-            self.embedding = nn.Embedding(95, embed_feat)
+        self.embed_dim = embed_dim
+        if embed_dim is not None:
+            self.embedding = nn.Embedding(95, embed_dim)
 
-        self.fibers = {'in': Fiber(1, atom_feature_size),
+        self.fibers = {'in': Fiber(1, atom_feat_size),
                        'mid': Fiber(num_degrees, self.num_channels),
                        'out': Fiber(1, num_degrees*self.num_channels)}
 
@@ -59,21 +59,21 @@ class SE3Transformer(nn.Module):
         fin = fibers['in']
         for i in range(self.num_layers):
             Gblock.append(GSE3Res(fin, fibers['mid'], edge_dim=self.edge_dim, 
-                                  div=self.div, n_heads=self.n_heads, mid_dim=self.mid_dim))
+                                  div=self.div, n_heads=self.n_heads, mid_dim=self.radial_dim))
             Gblock.append(GNormSE3(fibers['mid']))
             fin = fibers['mid']
         
         last_attention = False 
         if last_attention:
             Greg.append(GSE3Res(fibers['mid'], fibers['out'], edge_dim=self.edge_dim,
-                                  div=self.div, n_heads=self.n_heads, mid_dim=self.mid_dim))
+                                  div=self.div, n_heads=self.n_heads, mid_dim=self.radial_dim))
             Gclass.append(GSE3Res(fibers['mid'], fibers['out'], edge_dim=self.edge_dim,
-                                  div=self.div, n_heads=self.n_heads, mid_dim=self.mid_dim))
+                                  div=self.div, n_heads=self.n_heads, mid_dim=self.radial_dim))
         else:
             Greg.append(GConvSE3(fibers['mid'], fibers['out'], self_interaction=True, edge_dim=self.edge_dim,
-                                   mid_dim=self.mid_dim))
+                                   mid_dim=self.radial_dim))
             Gclass.append(GConvSE3(fibers['mid'], fibers['out'], self_interaction=True, edge_dim=self.edge_dim,
-                                   mid_dim=self.mid_dim))
+                                   mid_dim=self.radial_dim))
 
 
         return nn.ModuleList(Gblock), nn.ModuleList(Greg), nn.ModuleList(Gclass)
@@ -81,7 +81,7 @@ class SE3Transformer(nn.Module):
     def forward(self, G):
         # Embedding atomic features
         feats = [G.ndata['f']]
-        if self.embed_feat is not None:
+        if self.embed_dim is not None:
             feats.append(self.embedding(G.ndata['z']).unsqueeze(-1))
         G.ndata['f'] = torch.cat(feats, dim=-2)
 
@@ -180,13 +180,14 @@ class SE3Net(nn.Module):
                  div: float=4, 
                  pooling: str='avg', 
                  n_heads: int=4, 
-                 mid_dim: int=32, 
-                 embed_feat=None,
+                 radial_dim: int=32, 
+                 embed_dim=None,
                  **kwargs):
         super().__init__()
+        atom_feat_size += embed_dim if embed_dim is not None else 0
         self.gnn = SE3Transformer(num_layers, atom_feat_size, num_channels, num_nlayers=num_nlayers, 
                            num_degrees=num_degrees, edge_dim=edge_dim, div=div, pooling=pooling, 
-                           n_heads=n_heads, embed_feat=embed_feat, mid_dim=mid_dim)
+                           n_heads=n_heads, embed_dim=embed_dim, radial_dim=radial_dim)
         self.mlp_reg = MLPReg(num_channels, num_degrees)
         self.mlp_class = MLPClass(num_channels, num_degrees)
     
@@ -196,6 +197,6 @@ class SE3Net(nn.Module):
         if teacher_forcing:
             x = gt_label
         else:
-            x = torch.sigmoid(10*y)
+            x = torch.sigmoid(y)
         pred = self.mlp_reg(hr, x)
         return pred, torch.sigmoid(y)
