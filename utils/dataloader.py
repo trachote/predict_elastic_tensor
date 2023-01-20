@@ -1,6 +1,8 @@
 import dgl
 #import pandas as pd
 from utils.etc import ijdict_symmetric
+from utils.get_strained_crystal_new import MPtoGraph
+
 import torch
 from torch.utils.data import DataLoader, ConcatDataset
 
@@ -13,7 +15,8 @@ def collate(samples):
     graphs, y = map(list, zip(*samples))
     batched_graph = dgl.batch(graphs)
     return batched_graph, torch.tensor(y, dtype=torch.float), \
-           [g.mpid for g in graphs], [g.ij for g in graphs]
+           [g.mpid for g in graphs], [g.ij for g in graphs], \
+           [g.system for g in graphs]
 
 def get_loaders(df_train, df_val, max_edge, bs, graph_params, shuffle=True):     
     train_set, val_set = [], []

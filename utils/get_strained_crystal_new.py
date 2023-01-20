@@ -21,9 +21,10 @@ class MPtoGraph(Dataset):
                  strain=2,
                  weight='ones',
                  one_hot_size=95,
-                 atom_feat=None,
+                 atom_feats=None,
                  conventional_cell=True,
                  recenter=True,
+                 frac_coord=False,
                  edge_style='cell_radius',
                  graph_object='dgl',
                  train_energy=True,
@@ -41,10 +42,11 @@ class MPtoGraph(Dataset):
         self.con_cell = conventional_cell
         self.one_hot_size = one_hot_size
         self.recenter = recenter
+        self.frac_coord = frac_coord
         self.edge_style = edge_style
         self.graph_object = graph_object
         self.train_energy = train_energy
-        self.atom_feat = atom_feat
+        self.atom_feats = atom_feats
         self.normalize_target = normalize_target
         self.rotations = rotations
         self.dir_path = os.path.dirname(os.path.realpath(__file__))        
@@ -119,7 +121,7 @@ class MPtoGraph(Dataset):
         elif self.weight == 'inverse_square':
             return 100. / torch.pow(w, 2)
 
-    def _fractional_coords(self, matrix, v):
+    def _frac_coords(self, matrix, v):
         norm = np.linalg.norm(matrix, axis=-1)
         assert norm.shape[-1] == v.shape[-1]
         return torch.tensor(v / norm, dtype=torch.float)
@@ -131,11 +133,11 @@ class MPtoGraph(Dataset):
 
     def get_atom_feats(self, elems):
         feat = []
-        feat += [self._to_one_hot([elem.number for elem in elems], self.one_hot_size)] if 'Z' in self.atom_feat else []
-        feat += [torch.tensor([[[elem.atomic_mass]] for elem in elems])] if 'mass' in self.atom_feat else []
-        feat += [torch.tensor([[[elem.X]] for elem in elems])] if 'X' in self.atom_feat else []
-        feat += [torch.tensor([[[elem.atomic_radius if elem.atomic_radius != None else elem.atomic_radius_calculated]] for elem in elems])] if 'radius' in self.atom_feat else []
-        if 'polar' in self.atom_feat:
+        feat += [self._to_one_hot([elem.number for elem in elems], self.one_hot_size)] if 'Z' in self.atom_feats else []
+        feat += [torch.tensor([[[elem.atomic_mass]] for elem in elems])] if 'mass' in self.atom_feats else []
+        feat += [torch.tensor([[[elem.X]] for elem in elems])] if 'X' in self.atom_feats else []
+        feat += [torch.tensor([[[elem.atomic_radius if elem.atomic_radius != None else elem.atomic_radius_calculated]] for elem in elems])] if 'radius' in self.atom_feats else []
+        if 'polar' in self.atom_feats:
             """
             P. Schwerdtfeger and J. K. Nagle, 2018 
             table of static dipole polarizabilities of 
@@ -148,7 +150,7 @@ class MPtoGraph(Dataset):
         return feat
 
     def _graph_elements(self, struct, lat, mat_id):
-        if self.fractional_coords:
+        if self.frac_coord:
             coords = [site.frac_coords for site in struct.sites]
         else:
             coords = [item.coords for item in struct.sites]
@@ -171,8 +173,8 @@ class MPtoGraph(Dataset):
             R = R3.from_euler('zyx', angles, degrees=True).as_matrix()
             dr = torch.einsum('ij,nj->ni', torch.from_numpy(R).float(), dr)
 
-        if self.fractional_coords:
-            dr = self._fractional_coords(struct.lattice.matrix, dr)
+        if self.frac_coord:
+            dr = self._frac_coords(struct.lattice.matrix, dr)
         if self.recenter:
             coords = self._recenter(coords)
 
@@ -231,7 +233,7 @@ class MPtoGraph(Dataset):
             eij = self.eij[tensor_idx[0], tensor_idx[1]]
         strained_str, strained_lat = self.strained(struct, eij)
         pg = SpacegroupAnalyzer(strained_str).get_point_group_symbol()
-        bravais = SpacegroupAnalyzer(strained_str).get_crystal_system()
+        system = SpacegroupAnalyzer(strained_str).get_crystal_system()
 
         if self.graph_object == 'dgl':
             Gs = self.to_dgl(struct, strained_lat, mat_id)
@@ -239,7 +241,7 @@ class MPtoGraph(Dataset):
             Gs = self.to_pyg(struct, strained_lat, mat_id)
 
         Gs.mpid, Gs.ij, Gs.strain = mat_id, tensor_idx, self.strain
-        Gs.pg, Gs.bravais = pg, bravais
+        Gs.pg, Gs.system = pg, system
 
         if tensor_idx == (7, 7):
             y = - self.mean / self.std

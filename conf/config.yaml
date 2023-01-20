@@ -1,6 +1,7 @@
 model:
   task_loss: 'l1_loss'
-  num_teach_forcing: 10
+  weigth_class_loss: 10
+  num_teacher_forcing: 10
   max_edge: 500
   batch_size: 16
   num_epochs: 501
@@ -11,6 +12,7 @@ model:
       strain: 2
       conventional_cell: True
       recenter: True
+      frac_coord: False
       atom_feats: ['mass', 'X', 'polar', 'radius']
       train_energy: True
       edge_style: 'cell_radius'
@@ -21,6 +23,7 @@ model:
       strain: ${model.graph_params.train.strain}
       conventional_cell: ${model.graph_params.train.conventional_cell}
       recenter: ${model.graph_params.train.recenter}
+      frac_coord: ${model.graph_params.train.frac_coord}
       atom_feats: ${model.graph_params.train.atom_feats}
       train_energy: ${model.graph_params.train.train_energy}
       edge_style: ${model.graph_params.train.edge_style}
@@ -40,12 +43,12 @@ model:
     embed_dim: 512
     radial_dim: 128
 
-  otim:
-    optimizer:
-      lr: 1e-4
-      weight_decay: 0.
+otim:
+  optimizer:
+    lr: 1e-4
+    weight_decay: 0.
 
-    scheduler:
-      T_0: ${model.num_epochs}
-      T_mult: 1
-      eta_min: 1e-8
+  scheduler:
+    T_0: ${model.num_epochs}
+    T_mult: 1
+    eta_min: 1e-8

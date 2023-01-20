@@ -1,11 +1,13 @@
 import numpy as np
 import time
 import torch
+from torch import nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
-from experiments.qm9.models_onoff_fc3 import SE3Net
-from etc import *
+from ssl import SE3Net
+from utils.dataloader import get_loaders
+from utils.etc import *
 
 class Runner:
     def __init__(self, cfg, verbose=True):
@@ -32,8 +34,8 @@ class Runner:
                                                      T_mult=sch.T_mult,
                                                      eta_min=sch.eta_min)
 
-        self.criterion_reg = loss_fn(cfg.model.task_loss)
-        self.criterion_class = loss_fn('bce_loss')
+        self.criterion_reg = self.loss_fn(cfg.model.task_loss)
+        self.criterion_class = self.loss_fn('bce_loss')
         self.weigth_class_loss = cfg.model.weigth_class_loss
 
         self.num_teacher_forcing = cfg.model.num_teacher_forcing
@@ -56,11 +58,11 @@ class Runner:
 
     def get_acc(self, label, gt_label, ng):
         acc = (label > 0.5).eq(gt_label).sum().item() / 21 / ng
-        acc0 = ((label <= 0.5) & (gt_label == 0)).sum().item() / (gt_label == 0).sum()
-        acc1 = ((label > 0.5) & (gt_label == 1)).sum().item() / (gt_label == 1).sum()
+        acc0 = ((label <= 0.5) & (gt_label == 0)).sum().item() / (gt_label == 0).sum().item()
+        acc1 = ((label > 0.5) & (gt_label == 1)).sum().item() / (gt_label == 1).sum().item()
         return np.array([acc0, acc1, acc]) * ng
 
-    def train_step(epoch, dataloader, train_size):
+    def train_step(self, epoch, dataloader, train_size):
         avgloss, acc = np.zeros(3), np.zeros(3)
         num_iters = len(dataloader)
         dataloader = iter(dataloader)
@@ -70,12 +72,12 @@ class Runner:
         for i in range(num_iters):
             data = next(dataloader)
             g = data[0].to(self.device)
-            y = data[1].to(sefl.device)
+            y = data[1].to(self.device)
             mpid, ij, systems = data[2:]
             ng = y.shape[0]
 
-            gt_label = ij_labels(ij, systems, 'torch').to(device)
-            ij_index = rand_ij_index(gt_label).to(device)
+            gt_label = ij_labels(ij, systems, 'torch').to(self.device)
+            ij_index = rand_ij_index(gt_label).to(self.device)
             assert gt_label.shape == ij_index.shape
 
             pred, label = self.model(g, ij_index, gt_label, teacher_forcing)
@@ -83,7 +85,7 @@ class Runner:
             loss_class = self.criterion_class(label, gt_label)
             loss = loss_reg + self.weigth_class_loss * loss_class
             avgloss += np.array([loss_reg.detach().item(), loss_class.detach().item(), loss.detach().item()]) * ng
-            acc += get_acc(label, gt_label, ng)
+            acc += self.get_acc(label, gt_label, ng)
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -97,7 +99,7 @@ class Runner:
         acc /= train_size
         return avgloss, acc
 
-    def eval_step(epoch, dataloader, eval_size, mode):
+    def eval_step(self, epoch, dataloader, eval_size, mode):
         avgloss, acc = np.zeros(3), np.zeros(3)
         num_iters = len(dataloader)
         dataloader = iter(dataloader)
@@ -112,8 +114,8 @@ class Runner:
                 mpid, ij, systems = data[2:]
                 ng = y.shape[0]
 
-                gt_label = ij_labels(ij, systems, 'torch').to(device)
-                ij_index = ij_labels(ij, ['triclinic'] * bs * 2, 'torch').to(device)
+                gt_label = ij_labels(ij, systems, 'torch').to(self.device)
+                ij_index = ij_labels(ij, ['triclinic'] * bs * 2, 'torch').to(self.device)
                 assert gt_label.shape == ij_index.shape
 
                 pred, label = model(g, ij_index, gt_label, teacher_forcing)
@@ -121,7 +123,7 @@ class Runner:
                 loss_class = self.criterion_class(label, gt_label)
                 loss = loss_reg + self.weigth_class_loss * loss_class
                 avgloss += np.array([loss_reg.detach().item(), loss_class.detach().item(), loss.detach().item()]) * ng
-                acc += get_acc(label, gt_label, ng)
+                acc += self.get_acc(label, gt_label, ng)
 
                 if i%10 == 0:
                     print(f"...[{epoch}|{i}|{mode}]: reg {loss_reg:.4f}, ml {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
@@ -130,7 +132,7 @@ class Runner:
             acc /= eval_size
         return avgloss
 
-    def train(self, df_train, df_val):
+    def train(self, df_train, df_val, filename):
         tic = time.perf_counter()
         best_val_reg_loss, best_epoch = 1e6, 0
 

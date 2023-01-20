@@ -1,8 +1,9 @@
 import torch
 from torch import nn
+import sys
 
-from equivariant_attention.modules_deep import GConvSE3, GNormSE3, get_basis_and_r, GSE3Res, GMaxPooling, GAvgPooling
-from equivariant_attention.fibers import Fiber
+from se3t.equivariant_attention.modules import GConvSE3, GNormSE3, get_basis_and_r, GSE3Res, GMaxPooling, GAvgPooling
+from se3t.equivariant_attention.fibers import Fiber
 
 
 class SE3Transformer(nn.Module):
