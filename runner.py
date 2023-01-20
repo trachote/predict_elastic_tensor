@@ -74,7 +74,7 @@ class Runner:
             g = data[0].to(self.device)
             y = data[1].to(self.device)
             mpid, ij, systems = data[2:]
-            ng = y.shape[0]
+            ng = g.batch_size 
 
             gt_label = ij_labels(ij, systems, 'torch').to(self.device)
             ij_index = rand_ij_index(gt_label).to(self.device)
@@ -112,10 +112,10 @@ class Runner:
                 g = data[0].to(self.device)
                 y = data[1].to(self.device)
                 mpid, ij, systems = data[2:]
-                ng = y.shape[0]
+                ng = g.batch_size
 
                 gt_label = ij_labels(ij, systems, 'torch').to(self.device)
-                ij_index = ij_labels(ij, ['triclinic'] * self.bs * 2, 'torch').to(self.device)
+                ij_index = ij_labels(ij, ['triclinic'] * ng, 'torch').to(self.device)
                 assert gt_label.shape == ij_index.shape
 
                 pred, label = model(g, ij_index, gt_label, teacher_forcing)
