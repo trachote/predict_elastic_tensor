@@ -1,7 +1,8 @@
 model:
+  task_loss: 'l1_loss'
+  num_teach_forcing: 10
   max_edge: 500
   batch_size: 16
-  num_teach_forcing: 10
   num_epochs: 501
 
   graph_params:
