@@ -1,12 +1,5 @@
-import sys
-
-import numpy as np
 import torch
-
-from dgl.nn.pytorch import GraphConv, NNConv
 from torch import nn
-from torch.nn import functional as F
-from typing import Dict, Tuple, List
 
 from equivariant_attention.modules_deep import GConvSE3, GNormSE3, get_basis_and_r, GSE3Res, GMaxPooling, GAvgPooling
 from equivariant_attention.fibers import Fiber
