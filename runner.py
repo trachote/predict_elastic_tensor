@@ -60,10 +60,10 @@ class Runner:
         acc = (label > 0.5).eq(gt_label).sum().item() / 21 / ng
         acc0 = ((label <= 0.5) & (gt_label == 0)).sum().item() / (gt_label == 0).sum().item()
         acc1 = ((label > 0.5) & (gt_label == 1)).sum().item() / (gt_label == 1).sum().item()
-        return np.array([acc0, acc1, acc]) * ng
+        return np.array([acc0, acc1, acc]) 
 
     def train_step(self, epoch, dataloader, train_size):
-        avgloss, acc = np.zeros(3), np.zeros(3)
+        avgloss, acc_tot = np.zeros(3), np.zeros(3)
         num_iters = len(dataloader)
         dataloader = iter(dataloader)
         teacher_forcing = True if epoch < self.num_teacher_forcing else False
@@ -85,7 +85,8 @@ class Runner:
             loss_class = self.criterion_class(label, gt_label)
             loss = loss_reg + self.weigth_class_loss * loss_class
             avgloss += np.array([loss_reg.detach().item(), loss_class.detach().item(), loss.detach().item()]) * ng
-            acc += self.get_acc(label, gt_label, ng)
+            acc = self.get_acc(label, gt_label, ng)
+            acc_tot += acc * ng
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -97,10 +98,10 @@ class Runner:
 
         avgloss /= train_size
         acc /= train_size
-        return avgloss, acc
+        return avgloss, acc_tot
 
     def eval_step(self, epoch, dataloader, eval_size, mode):
-        avgloss, acc = np.zeros(3), np.zeros(3)
+        avgloss, acc_tot = np.zeros(3), np.zeros(3)
         num_iters = len(dataloader)
         dataloader = iter(dataloader)
         teacher_forcing = True if epoch < self.num_teacher_forcing else False
@@ -118,19 +119,20 @@ class Runner:
                 ij_index = ij_labels(ij, ['triclinic'] * ng, 'torch').to(self.device)
                 assert gt_label.shape == ij_index.shape
 
-                pred, label = model(g, ij_index, gt_label, teacher_forcing)
+                pred, label = self.model(g, ij_index, gt_label, teacher_forcing)
                 loss_reg = self.criterion_reg(pred, y)
                 loss_class = self.criterion_class(label, gt_label)
                 loss = loss_reg + self.weigth_class_loss * loss_class
                 avgloss += np.array([loss_reg.detach().item(), loss_class.detach().item(), loss.detach().item()]) * ng
-                acc += self.get_acc(label, gt_label, ng)
+                acc = self.get_acc(label, gt_label, ng)
+                acc_tot += acc * ng
 
                 if i%10 == 0:
                     print(f"...[{epoch}|{i}|{mode}]: reg {loss_reg:.4f}, ml {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
 
             avgloss /= eval_size
-            acc /= eval_size
-        return avgloss, acc
+            acc_tot /= eval_size
+        return avgloss, acc_tot
 
     def train(self, df_train, df_val, filename):
         tic = time.perf_counter()
@@ -154,20 +156,20 @@ class Runner:
                 best_val_reg_loss = val_loss[0]
                 best_epoch = epoch
                 save_pt = 'save_params/params_' + filename + '_best.pt'
-                torch.save(model.state_dict(), save_pt)
+                torch.save(self.model.state_dict(), save_pt)
 
             if epoch % 10 == 0:
                 save_pt = 'save_params/params_' + filename + '_' + str(epoch) + '.pt'
-                torch.save(model.state_dict(), save_pt)
+                torch.save(self.model.state_dict(), save_pt)
 
             toc_epoch = time.perf_counter()
             print(f"Current epoch: {epoch}")
             print(f"[train|{epoch}]: reg {train_loss[0]:.4f}, ml {train_loss[1]:.4f}, tot {train_loss[2]:.4f}, acc0 {train_acc[0]:.4f}, acc1 {train_acc[1]:.4f}, acc {train_acc[2]:.4f}")
-            print(f"[{mode}|{epoch}]: reg {val_loss[0]:.4f}, ml {val_loss[1]:.4f}, tot {val_loss[2]:.4f}, acc0 {val_acc[0]:.4f}, acc1 {val_acc[1]:.4f}, acc {val_acc[2]:.4f}")
+            print(f"[val|{epoch}]: reg {val_loss[0]:.4f}, ml {val_loss[1]:.4f}, tot {val_loss[2]:.4f}, acc0 {val_acc[0]:.4f}, acc1 {val_acc[1]:.4f}, acc {val_acc[2]:.4f}")
             #print(f"Best val reg loss at epoch: {best_epoch}")
             #print(f"All losses at best val reg loss: {best_val_loss:.4f}")
-            print(f'runnig time [{epoch}]: {toc_epoch - tic_epoch} s \n')
+            print(f'{self.device} run time [{epoch}]: {toc_epoch - tic_epoch} s \n')
 
         toc = time.perf_counter()
-        print(f'total running time: {toc - tic} s')
+        print(f'total {self.device} run time: {toc - tic} s')
 
