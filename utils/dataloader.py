@@ -15,7 +15,7 @@ def collate(samples):
     graphs, y = map(list, zip(*samples))
     batched_graph = dgl.batch(graphs)
     return batched_graph, torch.tensor(y, dtype=torch.float), \
-           [g.mpid for g in graphs], [g.ij for g in graphs], \
+           [g.mat_id for g in graphs], [g.ij for g in graphs], \
            [g.system for g in graphs]
 
 def get_loaders(df_train, df_val, max_edge, bs, graph_params, shuffle=True):     
@@ -58,3 +58,7 @@ def get_loaders(df_train, df_val, max_edge, bs, graph_params, shuffle=True):
     return (train_loader, val_loader),\
            (train_size, val_size),\
            (mean, std)
+
+def get_eval_loader(df, bs, graph_params):
+    dataset = MPtoGraph(df, **graph_params.val, task='eval')
+    return DataLoader(dataset, batch_size=bs, shuffle=False, collate_fn=collate)
