@@ -181,6 +181,8 @@ class Runner:
         for i, j in zip(range(6), reversed(range(1,7))):
             matrix[i, i:] += x[k:k+j]
             k += j
+        n, m = np.triu_indices(6, k=1)
+        matrix[(m, n)] = matrix[(n, m)]
         return matrix
 
     def to_elastic_tensor(self, x, nsites, volume):
