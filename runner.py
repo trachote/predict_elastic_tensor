@@ -105,7 +105,7 @@ class Runner:
         dataloader = iter(dataloader)
         teacher_forcing = True if epoch < self.num_teacher_forcing else False
 
-        model.eval()
+        self.model.eval()
         with torch.no_grad():
             for i in range(num_iters):
                 data = next(dataloader)
