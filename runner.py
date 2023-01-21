@@ -5,8 +5,8 @@ from torch import nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
-from ssl import SE3Net
-from utils.dataloader import get_loaders
+from model import SE3Net
+from utils.dataloader import get_loaders, get_eval_loader
 from utils.etc import *
 
 class Runner:
@@ -76,16 +76,16 @@ class Runner:
             mpid, ij, systems = data[2:]
             ng = g.batch_size 
 
-            gt_label = ij_labels(ij, systems, 'torch').to(self.device)
-            ij_index = rand_ij_index(gt_label).to(self.device)
-            assert gt_label.shape == ij_index.shape
+            gt_labels = ij_labels(ij, systems, 'torch').to(self.device)
+            ij_index = rand_ij_index(gt_labels).to(self.device)
+            assert gt_labels.shape == ij_index.shape
 
-            pred, label = self.model(g, ij_index, gt_label, teacher_forcing)
+            pred, label = self.model(g, ij_index, gt_labels, teacher_forcing)
             loss_reg = self.criterion_reg(pred, y)
-            loss_class = self.criterion_class(label, gt_label)
+            loss_class = self.criterion_class(label, gt_labels)
             loss = loss_reg + self.weigth_class_loss * loss_class
             avgloss += np.array([loss_reg.detach().item(), loss_class.detach().item(), loss.detach().item()]) * ng
-            acc = self.get_acc(label, gt_label, ng)
+            acc = self.get_acc(label, gt_labels, ng)
             acc_tot += acc * ng
 
             self.optimizer.zero_grad()
@@ -100,6 +100,7 @@ class Runner:
         acc /= train_size
         return avgloss, acc_tot
 
+    @torch.no_grad()
     def eval_step(self, epoch, dataloader, eval_size, mode):
         avgloss, acc_tot = np.zeros(3), np.zeros(3)
         num_iters = len(dataloader)
@@ -107,41 +108,40 @@ class Runner:
         teacher_forcing = True if epoch < self.num_teacher_forcing else False
 
         self.model.eval()
-        with torch.no_grad():
-            for i in range(num_iters):
-                data = next(dataloader)
-                g = data[0].to(self.device)
-                y = data[1].to(self.device)
-                mpid, ij, systems = data[2:]
-                ng = g.batch_size
+        for i in range(num_iters):
+            data = next(dataloader)
+            g = data[0].to(self.device)
+            y = data[1].to(self.device)
+            mpid, ij, systems = data[2:]
+            ng = g.batch_size
 
-                gt_label = ij_labels(ij, systems, 'torch').to(self.device)
-                ij_index = ij_labels(ij, ['triclinic'] * ng, 'torch').to(self.device)
-                assert gt_label.shape == ij_index.shape
+            gt_labels = ij_labels(ij, systems, 'torch').to(self.device)
+            ij_index = ij_labels(ij, ['triclinic'] * ng, 'torch').to(self.device)
+            assert gt_labels.shape == ij_index.shape
 
-                pred, label = self.model(g, ij_index, gt_label, teacher_forcing)
-                loss_reg = self.criterion_reg(pred, y)
-                loss_class = self.criterion_class(label, gt_label)
-                loss = loss_reg + self.weigth_class_loss * loss_class
-                avgloss += np.array([loss_reg.detach().item(), loss_class.detach().item(), loss.detach().item()]) * ng
-                acc = self.get_acc(label, gt_label, ng)
-                acc_tot += acc * ng
+            pred, label = self.model(g, ij_index, gt_labels, teacher_forcing)
+            loss_reg = self.criterion_reg(pred, y)
+            loss_class = self.criterion_class(label, gt_labels)
+            loss = loss_reg + self.weigth_class_loss * loss_class
+            avgloss += np.array([loss_reg.detach().item(), loss_class.detach().item(), loss.detach().item()]) * ng
+            acc = self.get_acc(label, gt_labels, ng)
+            acc_tot += acc * ng
 
-                if i%10 == 0:
-                    print(f"...[{epoch}|{i}|{mode}]: reg {loss_reg:.4f}, ml {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
+            if i%10 == 0:
+                print(f"...[{epoch}|{i}|{mode}]: reg {loss_reg:.4f}, ml {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
 
-            avgloss /= eval_size
-            acc_tot /= eval_size
+        avgloss /= eval_size
+        acc_tot /= eval_size
         return avgloss, acc_tot
 
-    def train(self, df_train, df_val, filename):
+    def train(self, train_df, val_df, filename):
         tic = time.perf_counter()
         best_val_reg_loss, best_epoch = 1e6, 0
 
-        loaders, sizes, stats = get_loaders(df_train, df_val, self.max_edge, self.bs, self.graph_params)
+        loaders, sizes, stats = get_loaders(train_df, val_df, self.max_edge, self.bs, self.graph_params)
         train_loader, val_loader = loaders
         train_size, val_size = sizes
-        mean, std = stats
+        torch.save(stats, 'save_params/stats_' + filename + '.pt') # save mean and std
 
         print('BEGIN TRAINING')
         print(f'save file: {filename}')
@@ -173,3 +173,76 @@ class Runner:
         toc = time.perf_counter()
         print(f'total {self.device} run time: {toc - tic} s')
 
+    def to_6x6matrix(self, x):
+        x = x.reshape(-1)
+        assert x.shape[0] == 21
+        matrix = np.zeros((6, 6))
+        k = 0
+        for i, j in zip(range(6), reversed(range(1,7))):
+            matrix[i, i:] += x[k:k+j]
+            k += j
+        return matrix
+
+    def to_elastic_tensor(self, x, nsites, volume):
+        unit_converter = 1000. / 160.2176487
+        matrix = np.zeros((6, 6))
+        const = nsites / ((self.graph_params.train.strain / 100) ** 2 * volume * unit_converter)
+        for i in range(6):
+            for j in range(i, 6):
+                kron = 1. if i == j else 0.
+                matrix[i, j] = const * (1 + kron) * (x[i, j] - (x[i, i] + x[j, j]) * (1 - kron))
+                matrix[j, i] = matrix[i, j]
+        return matrix
+
+    @torch.no_grad()
+    def predict(self, pred_df, filename, bs=21, use_gt_label=False):
+        from tqdm import tqdm
+
+        # Load model
+        load_path = 'save_params/params_' + filename + '_best.pt'
+        self.model.load_state_dict(torch.load(load_path))
+        self.model.eval()
+
+        # Dataloader
+        dataloader = get_eval_loader(pred_df, bs, self.graph_params)
+
+        # Etc
+        mean, std = torch.load('save_params/stats_' + filename + '.pt')
+        uij, cij = {}, {}
+
+        print("Start prediction")
+        print(f"Number of crystal structures: {len(pred_df)}")
+        for n, data in tqdm(enumerate(dataloader), total=len(dataloader), desc='Uij (meV/atom)'):
+            g = data[0].to(self.device)
+            mat_id, ij, systems = data[2:]
+            ng = g.batch_size
+            gt_labels = ij_labels(ij, systems, 'torch').to(self.device)
+            ij_index = ij_labels(ij, ['triclinic'] * ng, 'torch').to(self.device)
+            if use_gt_label:
+                forced_labels = gt_labels
+                teacher_forcing = True
+            else:
+                forced_labels = None
+                teacher_forcing = False
+
+            pred, label = self.model(g, ij_index, forced_labels, teacher_forcing)
+            pred, label = pred.cpu().numpy(), label.cpu().numpy()
+            if self.graph_params.train.normalize:
+                pred = pred * std + mean
+
+            pred = pred.reshape(-1)
+            assert len(pred) == ng
+            for k in range(ng):
+                if mat_id[k] not in uij.keys():
+                    uij[mat_id[k]] = {}
+                uij[mat_id[k]][ij[k]] = pred[k]
+
+        for n, key in enumerate(uij.keys()):
+            u = np.array([uij[key][(i,j)] for i in range(6) for j in range(i,6)])
+            u = self.to_6x6matrix(u)
+            uij[key] = u
+            mat_info = pred_df.iloc[n]
+            cij[key] = self.to_elastic_tensor(u, mat_info['nsites'], mat_info['volume'])
+
+        print("Finish prediction")
+        return uij, cij
