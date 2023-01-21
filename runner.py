@@ -130,7 +130,7 @@ class Runner:
 
             avgloss /= eval_size
             acc /= eval_size
-        return avgloss
+        return avgloss, acc
 
     def train(self, df_train, df_val, filename):
         tic = time.perf_counter()
