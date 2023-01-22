@@ -30,6 +30,7 @@ class MPtoGraph(Dataset):
                  train_energy=True,
                  normalize_target=True,
                  rotations=None,
+                 task='train',
                  **kwargs
                 ):
 
@@ -49,6 +50,7 @@ class MPtoGraph(Dataset):
         self.atom_feats = atom_feats
         self.normalize_target = normalize_target
         self.rotations = rotations
+        self.task = task
         self.dir_path = os.path.dirname(os.path.realpath(__file__))        
 
         if shuffle:
@@ -59,7 +61,8 @@ class MPtoGraph(Dataset):
                       12: (2, 3), 13: (2, 4), 14: (2, 5), 15: (3, 3), 16: (3, 4), 17: (3, 5),
                       18: (4, 4), 19: (4, 5), 20: (5, 5)}
 
-        self.load_data()
+        if self.task == 'train':
+            self.load_data()
         self.data_len = len(self.df)
         self.multiply = len(self.ijkey)
         self.len = self.data_len * self.multiply
@@ -149,18 +152,14 @@ class MPtoGraph(Dataset):
         feat = torch.cat(feat, dim=1).float()
         return feat
 
-    def _graph_elements(self, struct, lat, mat_id):
+    def _graph_elements(self, struct, lat):
         if self.frac_coord:
             coords = [site.frac_coords for site in struct.sites]
         else:
             coords = [item.coords for item in struct.sites]
         coords = torch.tensor(coords, dtype=torch.float)
 
-        #if self.edge_style == 'crystalnn':
-        if False:
-            edges = self.crystalnn_edges[mat_id]
-        else:
-            edges = getattr(Edges(struct, coord_type='frac'), self.edge_style)(max_radius=12., extension=0.5)
+        edges = getattr(Edges(struct, coord_type='frac'), self.edge_style)(max_radius=12., extension=0.5)
         src, dst, dist, dr, T = edges.src, edges.dst, edges.dist, edges.dr, edges.cell
         dr = torch.einsum('ni,ij->nj', dr, lat)
         elems = [struct.species[n] for n in range(len(struct.sites))]
@@ -184,8 +183,8 @@ class MPtoGraph(Dataset):
         cell = torch.einsum('ij,ni->nj', torch.tensor(struct.lattice.matrix.tolist()).float(), edges.cell)
         return coords, feat, z, src, dst, dr, edge_attr, cell
 
-    def to_dgl(self, struct, lat, mat_id):
-        pos, feat, z, src, dst, dr, w, T = self._graph_elements(struct, lat, mat_id)
+    def to_dgl(self, struct, lat):
+        pos, feat, z, src, dst, dr, w, T = self._graph_elements(struct, lat)
         G = dgl.graph((src, dst))
         G.ndata['x'] = pos
         G.ndata['f'] = feat
@@ -194,8 +193,8 @@ class MPtoGraph(Dataset):
         G.edata['w'] = w
         return G
 
-    def to_pyg(self, struct, lat, mat_id):
-        pos, x, z, src, dst, dr, w, T = self._graph_elements(struct, lat, mat_id)
+    def to_pyg(self, struct, lat):
+        pos, x, z, src, dst, dr, w, T = self._graph_elements(struct, lat)
         edge_index = torch.cat((src.reshape(1, -1), dst.reshape(1, -1)))
         return Data(x=x.squeeze(-1), pos=pos, edge_index=edge_index, edge_attr=dr, z=z, T=T)
 
@@ -214,16 +213,11 @@ class MPtoGraph(Dataset):
 
     def __getitem__(self, idx):
         data_idx = idx % self.data_len
-        mat_id = self.df.index[data_idx]
         struct = Structure.from_str(self.df['cif'][data_idx], 'cif')
         if self.con_cell:
             struct = SpacegroupAnalyzer(struct).get_conventional_standard_structure()
             ## an a axis of the hexagonal lattice will be aligned on x axis by using get_refined_structure.
             # struct = SpacegroupAnalyzer(struct).get_refined_structure()
-
-        y = self.get_target(data_idx)
-        ## cij and lattice parameters are not aligned on the same axes; therefore, data must be transformed.
-        y = data_alignment(struct, y)
 
         tensor_idx = self._get_ij(data_idx, idx)
         self.ij_idx = tensor_idx
@@ -236,17 +230,24 @@ class MPtoGraph(Dataset):
         system = SpacegroupAnalyzer(strained_str).get_crystal_system()
 
         if self.graph_object == 'dgl':
-            Gs = self.to_dgl(struct, strained_lat, mat_id)
+            Gs = self.to_dgl(struct, strained_lat)
         elif self.graph_object == 'pyg':
-            Gs = self.to_pyg(struct, strained_lat, mat_id)
+            Gs = self.to_pyg(struct, strained_lat)
+        Gs.ij, Gs.system = tensor_idx, system
+        Gs.mat_id = 'material_' + f'{data_idx:03d}'
 
-        Gs.mpid, Gs.ij, Gs.strain = mat_id, tensor_idx, self.strain
-        Gs.pg, Gs.system = pg, system
-
-        if tensor_idx == (7, 7):
-            y = - self.mean / self.std
-        else:
-            y = y[tensor_idx[0]][tensor_idx[1]]
+        if self.task == 'train':
+            y = self.get_target(data_idx)
+            ## cij and lattice parameters are not aligned on the same axes; therefore, data must be transformed.
+            y = data_alignment(struct, y)
+            if tensor_idx == (7, 7):
+                y = - self.mean / self.std
+            else:
+                y = y[tensor_idx[0]][tensor_idx[1]]
+            mat_id = self.df.index[data_idx]
+            Gs.mat_id, Gs.pg = mat_id, pg
+        elif self.task == 'eval':
+            y = 0.
 
         if self.graph_object == 'pyg':
             Gs.y = torch.tensor(y, dtype=torch.float).view(-1, 1)
