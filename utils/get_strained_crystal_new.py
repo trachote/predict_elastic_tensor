@@ -56,10 +56,8 @@ class MPtoGraph(Dataset):
         if shuffle:
             self.df = self.df.sample(frac=1)
 
-        self.ijkey = {0: (0, 0), 1: (0, 1), 2: (0, 2), 3: (0, 3), 4: (0, 4), 5: (0, 5),
-                      6: (1, 1), 7: (1, 2), 8: (1, 3), 9: (1, 4), 10: (1, 5), 11: (2, 2),
-                      12: (2, 3), 13: (2, 4), 14: (2, 5), 15: (3, 3), 16: (3, 4), 17: (3, 5),
-                      18: (4, 4), 19: (4, 5), 20: (5, 5)}
+        self.ijkey = {i*6-sum([k for k in range(i+1)])+j: (i, j) 
+                      for i in range(6) for j in range(i, 6)} # {0: (0,0), 1: (0,1), ..., 20: (5,5)}
 
         if self.task == 'train':
             self.load_data()
