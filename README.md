@@ -1,5 +1,5 @@
 # Predicting strain energy and elastic tensors
-StrainNet code is an implementation of a paper StrainNet: Predicting crystal structure elastic properties using SE(3)-equivariant graph neural networks.
+StrainNet code is an implementation of a paper [StrainNet: Predicting crystal structure elastic properties using SE(3)-equivariant graph neural networks] (https://arxiv.org/abs/2306.12818).
 
 StrainNet can be employed to train and/or predict a strain energy density in a unit of eV/atom.
 21 strain energy density of each crystal structure will be predicted and can be converted to an elastic tensor.
