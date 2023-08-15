@@ -1,4 +1,4 @@
-Materials in the dataset are from Materials Project. Please cite them as
+Material information and elastic tensors in the dataset were queried from Materials Project. Please cite them as
 
 Materials Project
 ```
