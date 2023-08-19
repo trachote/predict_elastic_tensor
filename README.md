@@ -6,11 +6,11 @@ StrainNet can be employed to train and/or predict a strain energy density in a u
 
 training command:
 ```
-python train.py --config_path conf/config.yaml --filename testfile
+python train.py --config_path conf/config.yaml --out_dir output
 ```
 predicting command:
 ```
-python predict.py --filename testfile --df_filename mp_val_clean
+python predict.py --ckpt_dir output --json_path path-to-json-file
 ```
 # SE(3)-Transformers
 
