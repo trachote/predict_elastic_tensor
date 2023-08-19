@@ -1,12 +1,17 @@
 import numpy as np
 import time
+import copy
+import json
+import os
+import glob
+
 import torch
 from torch import nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 from model import SE3Net
-from utils.dataloader import get_loaders, get_eval_loader
+from utils.datamodule import get_loaders, get_eval_loader
 from utils.etc import *
 
 class Runner:
@@ -14,6 +19,7 @@ class Runner:
         hparams = cfg.model.conv
         opt = cfg.otim.optimizer
         sch = cfg.otim.scheduler
+        self.cfg = cfg
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = SE3Net(hparams.num_layers,
@@ -39,13 +45,111 @@ class Runner:
         self.weigth_class_loss = cfg.model.weigth_class_loss
 
         self.num_teacher_forcing = cfg.model.num_teacher_forcing
-        self.max_edge = cfg.model.max_edge
+        self.max_edge_size = cfg.dataset.max_edge_size
         self.bs = cfg.model.batch_size
         self.num_epochs = cfg.model.num_epochs
         self.graph_params = cfg.model.graph_params
 
         if verbose:
             print(self.model)
+    
+    def _load_checkpoint(self, mode='train'):
+        ckpts = list(glob.glob(f'{self.cfg.out_dir}/*={self.cfg.suffix}.ckpt'))  
+        
+        if len(ckpts) > 0:
+            ckpt_epochs = [ckpt.split('/')[-1].split('.')[0].split('=')[1] for ckpt in ckpts]
+            ckpt_epochs = np.array([int(epoch) if epoch != 'best' else -1 for epoch in ckpt_epochs])
+            if mode == 'train':
+                ckpt = str(ckpts[ckpt_epochs.argsort()[-1]])
+            elif mode == 'predict':
+                ckpt = str(ckpts[ckpt_epochs.argsort()[0]])
+            
+            print(f">>>>> Load model from checkpoint:\n{ckpt}\n")
+            if torch.cuda.is_available():
+                ckpt = torch.load(ckpt)
+            else:
+                ckpt = torch.load(ckpt, map_location=torch.device('cpu'))
+            
+            print(f">>>>> Update model from checkpoint:") 
+            self.model.load_state_dict(ckpt['model_state_dict'])
+
+            if mode == 'train':
+                try:
+                    self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+                except:
+                    print("ERROR: Loading optimizer")
+                try:
+                    self.scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+                except:
+                    print("ERROR: Loading scheduler")                
+                   
+            start_epoch = ckpt['epoch'] + 1
+            best_val_loss = ckpt['best_val_loss']
+            best_val_epoch = ckpt['best_val_epoch']
+            ckpt_path = f"{self.cfg.out_dir}/epoch={ckpt['epoch']}={self.cfg.suffix}.ckpt"
+            best_ckpt_path = f"{self.cfg.out_dir}/epoch=best={self.cfg.suffix}.ckpt"
+            print(f"revived epoch: {ckpt['epoch']}")
+            print(f"best_val_reg_loss: {best_val_loss}")
+            print(f"best_val_epoch: {best_val_epoch}\n")
+            print(f">>>>> CONTINUE TRAINING")
+            
+        else:
+            print(f">>>>> NEW TRAINING")
+            start_epoch = 0
+            best_val_loss, best_val_epoch = 1e12, -1
+            ckpt_path, best_ckpt_path = None, None
+                
+        return start_epoch, (best_val_loss, best_val_epoch), (ckpt_path, best_ckpt_path)
+
+    def _save_checkpoint(self, model_ckpt, ckpt_path, epoch):
+        new_ckpt_path = f"{self.cfg.out_dir}/epoch={epoch}={self.cfg.suffix}.ckpt"
+        #if new_ckpt_path != ckpt_path:
+        if ckpt_path and os.path.exists(ckpt_path):
+            os.remove(ckpt_path)        
+        torch.save(model_ckpt, new_ckpt_path)
+        print(f"saved {epoch} checkpoint: ", new_ckpt_path)
+        #print("\tmodel checkpoint train loss: ", model_ckpt['train_loss'])
+        #print("\tmodel checkpoint val loss: ", model_ckpt['val_loss'])
+        return new_ckpt_path
+
+    def _get_checkpoint_dict(self, epoch, best_val_loss, best_val_epoch):
+        model_ckpt = {
+                'model_state_dict': copy.deepcopy(self.model.state_dict()), 
+                'optimizer_state_dict': copy.deepcopy(self.optimizer.state_dict()), 
+                'scheduler_state_dict': copy.deepcopy(self.scheduler.state_dict()),
+                'epoch': epoch, 
+                'best_val_loss': best_val_loss,
+                'best_val_epoch': best_val_epoch,
+                #'train_reg_loss': log_dict['train_reg_loss'], 
+                #'val_reg_loss': log_dict['val_reg_loss'] 
+            }
+        return model_ckpt
+
+    def _logging(self, epoch, train_loss, train_acc, val_loss, val_acc):
+        log_dict = {'epoch': epoch, 
+                    'train_reg_loss': train_loss[0].item(), 
+                    'train_class_loss': train_loss[1].item(), 
+                    'train_tot_loss': train_loss[2].item(),
+                    'train_acc0': train_acc[0].item(),
+                    'train_acc1': train_acc[1].item(),
+                    'train_acc': train_acc[2].item(),
+                    'val_reg_loss': val_loss[0].item(),
+                    'val_class_loss': val_loss[1].item(),
+                    'val_tot_loss': val_loss[2].item(),
+                    'val_acc0': val_acc[0].item(),
+                    'val_acc1': val_acc[1].item(),
+                    'val_acc': val_acc[2].item()
+                   }  
+        
+        with open(self.cfg.out_dir + "/training_metrics.json", 'a') as f:
+            f.write(json.dumps({k: v for k, v in log_dict.items()}))
+            f.write('\r\n')
+
+    def _early_stopping(self, epoch, best_val_epoch):
+        if epoch - best_val_epoch > self.cfg.early_stopping_patience:
+            return True
+        else:
+            return False
 
     def loss_fn(self, task_loss):
         if task_loss == 'l1_loss':
@@ -93,7 +197,7 @@ class Runner:
             self.optimizer.step()
             self.scheduler.step(epoch + i / num_iters)
 
-            if i%10 == 0:
+            if i%100 == 0:
                 print(f"[{epoch}|{i}]: reg {loss_reg:.4f}, ml {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
 
         avgloss /= train_size
@@ -127,48 +231,52 @@ class Runner:
             acc = self.get_acc(label, gt_labels, ng)
             acc_tot += acc * ng
 
-            if i%10 == 0:
+            if i%100 == 0:
                 print(f"...[{epoch}|{i}|{mode}]: reg {loss_reg:.4f}, ml {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
 
         avgloss /= eval_size
         acc_tot /= eval_size
         return avgloss, acc_tot
 
-    def train(self, train_df, val_df, filename):
+    def train(self, train_df, val_df):
         tic = time.perf_counter()
-        best_val_reg_loss, best_epoch = 1e6, 0
 
-        loaders, sizes, stats = get_loaders(train_df, val_df, self.max_edge, self.bs, self.graph_params)
+        print("LOAD DATASET")
+        loaders, sizes, stats = get_loaders(train_df, val_df, self.max_edge_size, self.bs, self.graph_params)
         train_loader, val_loader = loaders
         train_size, val_size = sizes
-        torch.save(stats, 'save_params/stats_' + filename + '.pt') # save mean and std
+        torch.save(stats, f'{self.cfg.out_dir}/stats_{self.cfg.suffix}.pt') # save mean and std
+        
+        print(f'saved directory: {self.cfg.out_dir}, saved name: {self.cfg.suffix}')
+        start_epoch, bests, paths = self._load_checkpoint('train')
+        best_val_reg_loss, best_val_epoch = bests
+        ckpt_path, best_ckpt_path = paths
 
-        print('BEGIN TRAINING')
-        print(f'save file: {filename}')
-
-        for epoch in range(self.num_epochs):
+        for epoch in range(start_epoch, self.num_epochs):
             tic_epoch = time.perf_counter()
-
+            
             train_loss, train_acc = self.train_step(epoch, train_loader, train_size)
             val_loss, val_acc = self.eval_step(epoch, val_loader, val_size, 'val')
 
+            self._logging(epoch, train_loss, train_acc, val_loss, val_acc)  
             if val_loss[0] <= best_val_reg_loss:
                 best_val_reg_loss = val_loss[0]
-                best_epoch = epoch
-                save_pt = 'save_params/params_' + filename + '_best.pt'
-                torch.save(self.model.state_dict(), save_pt)
-
-            if epoch % 10 == 0:
-                save_pt = 'save_params/params_' + filename + '_' + str(epoch) + '.pt'
-                torch.save(self.model.state_dict(), save_pt)
+                best_val_epoch = epoch
+                model_ckpt = self._get_checkpoint_dict(epoch, best_val_reg_loss, best_val_epoch)
+                best_ckpt_path = self._save_checkpoint(model_ckpt, best_ckpt_path, 'best')            
+            model_ckpt = self._get_checkpoint_dict(epoch, best_val_reg_loss, best_val_epoch)
+            ckpt_path = self._save_checkpoint(model_ckpt, ckpt_path, epoch)  
 
             toc_epoch = time.perf_counter()
-            print(f"Current epoch: {epoch}")
+            print(f"Summary epoch {epoch}:")
             print(f"[train|{epoch}]: reg {train_loss[0]:.4f}, ml {train_loss[1]:.4f}, tot {train_loss[2]:.4f}, acc0 {train_acc[0]:.4f}, acc1 {train_acc[1]:.4f}, acc {train_acc[2]:.4f}")
             print(f"[val|{epoch}]: reg {val_loss[0]:.4f}, ml {val_loss[1]:.4f}, tot {val_loss[2]:.4f}, acc0 {val_acc[0]:.4f}, acc1 {val_acc[1]:.4f}, acc {val_acc[2]:.4f}")
-            #print(f"Best val reg loss at epoch: {best_epoch}")
-            #print(f"All losses at best val reg loss: {best_val_loss:.4f}")
+            print(f"best_val_reg_loss: {best_val_reg_loss:.4f}")
             print(f'{self.device} run time [{epoch}]: {toc_epoch - tic_epoch} s \n')
+
+            if self._early_stopping(epoch, best_val_epoch):
+                print(f'Training has been early stopped at epoch {epoch}.')
+                break
 
         toc = time.perf_counter()
         print(f'total {self.device} run time: {toc - tic} s')
@@ -197,19 +305,20 @@ class Runner:
         return matrix
 
     @torch.no_grad()
-    def predict(self, pred_df, filename, bs=21, use_gt_label=False):
+    def predict(self, pred_df, limit_edge_size=False, use_gt_label=False):
         from tqdm import tqdm
 
         # Load model
-        load_path = 'save_params/params_' + filename + '_best.pt'
-        self.model.load_state_dict(torch.load(load_path))
+        self._load_checkpoint('predict')
         self.model.eval()
 
         # Dataloader
-        dataloader = get_eval_loader(pred_df, bs, self.graph_params)
+        if limit_edge_size:
+            pred_df = pred_df[pred_df[f'{self.cfg.dataset.edge_style}_edge_size'] <= self.max_edge_size]
+        dataloader = get_eval_loader(pred_df, self.cfg.batch_size, self.graph_params)
 
         # Etc
-        mean, std = torch.load('save_params/stats_' + filename + '.pt')
+        mean, std = torch.load(f'{self.cfg.ckpt_dir}/stats_{self.cfg.suffix}.pt')
         uij, cij = {}, {}
 
         print("Start prediction")
