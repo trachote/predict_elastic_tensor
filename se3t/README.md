@@ -1,4 +1,4 @@
-#SE(3)-Transformers
+# SE(3)-Transformers
 This code is from [SE(3)-Transformers: 3D Roto-Translation Equivariant Attention Networks](https://github.com/FabianFuchsML/se3-transformer-public).
 The code has been modified to be able to set the number of hidden units of the radial part.
 This hyperparameter significantly improves the performance of the training on crystal structures.
