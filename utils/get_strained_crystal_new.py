@@ -52,6 +52,12 @@ class MPtoGraph(Dataset):
         self.rotations = rotations
         self.task = task
         self.dir_path = os.path.dirname(os.path.realpath(__file__))        
+        
+        if self.edge_style == 'crystalnn':
+            import pickle
+            file = os.path.join(self.dir_path, 'crystalnn_edge_dict.p') 
+            with open(file, 'rb') as fp:
+                self.crystalnn_edges = pickle.load(fp)
 
         if shuffle:
             self.df = self.df.sample(frac=1)
@@ -150,15 +156,24 @@ class MPtoGraph(Dataset):
         feat = torch.cat(feat, dim=1).float()
         return feat
 
-    def _graph_elements(self, struct, lat):
+    def _graph_elements(self, struct, lat, idx):
         if self.frac_coord:
             coords = [site.frac_coords for site in struct.sites]
         else:
             coords = [item.coords for item in struct.sites]
         coords = torch.tensor(coords, dtype=torch.float)
 
-        edges = getattr(Edges(struct, coord_type='frac'), self.edge_style)(max_radius=12., extension=0.5)
-        src, dst, dist, dr, T = edges.src, edges.dst, edges.dist, edges.dr, edges.cell
+        if self.edge_style == 'crystalnn':
+            mat_id = self.df.index[idx]
+            edges = self.crystalnn_edges[mat_id]
+            src = edges['src']
+            dst = edges['dst']
+            dist = edges['dist']
+            dr = edges['dr']
+            T = edges['cell']
+        else:
+            edges = getattr(Edges(struct, coord_type='frac'), self.edge_style)(max_radius=12., extension=0.5)
+            src, dst, dist, dr, T = edges.src, edges.dst, edges.dist, edges.dr, edges.cell
         dr = torch.einsum('ni,ij->nj', dr, lat)
         elems = [struct.species[n] for n in range(len(struct.sites))]
 
@@ -178,11 +193,11 @@ class MPtoGraph(Dataset):
         feat = self.get_atom_feats(elems)
         z = torch.tensor([elem.Z for elem in elems], dtype=torch.long)
         edge_attr = self._weight_fn(dist, sites=elems, src=src, dst=dst).float()
-        cell = torch.einsum('ij,ni->nj', torch.tensor(struct.lattice.matrix.tolist()).float(), edges.cell)
+        cell = torch.einsum('ij,ni->nj', torch.tensor(struct.lattice.matrix.tolist()).float(), T)
         return coords, feat, z, src, dst, dr, edge_attr, cell
 
-    def to_dgl(self, struct, lat):
-        pos, feat, z, src, dst, dr, w, T = self._graph_elements(struct, lat)
+    def to_dgl(self, struct, lat, idx):
+        pos, feat, z, src, dst, dr, w, T = self._graph_elements(struct, lat, idx)
         G = dgl.graph((src, dst))
         G.ndata['x'] = pos
         G.ndata['f'] = feat
@@ -191,8 +206,8 @@ class MPtoGraph(Dataset):
         G.edata['w'] = w
         return G
 
-    def to_pyg(self, struct, lat):
-        pos, x, z, src, dst, dr, w, T = self._graph_elements(struct, lat)
+    def to_pyg(self, struct, lat, idx):
+        pos, x, z, src, dst, dr, w, T = self._graph_elements(struct, lat, idx)
         edge_index = torch.cat((src.reshape(1, -1), dst.reshape(1, -1)))
         return Data(x=x.squeeze(-1), pos=pos, edge_index=edge_index, edge_attr=dr, z=z, T=T)
 
@@ -202,8 +217,6 @@ class MPtoGraph(Dataset):
         return ijlist[n]
 
     def strained(self, struct, eij):
-        ## The equation from [S Q Wang and H Q Ye 2003 J. Phys.: Condens. Matter 15 5307] was incorrect.
-        #strained_lat = np.matmul(struct.lattice.matrix, eij)
         strained_lat = np.matmul(eij, struct.lattice.matrix)
         strained_str = struct.copy()
         strained_str.lattice = Lattice(strained_lat)
@@ -228,9 +241,9 @@ class MPtoGraph(Dataset):
         system = SpacegroupAnalyzer(strained_str).get_crystal_system()
 
         if self.graph_object == 'dgl':
-            Gs = self.to_dgl(struct, strained_lat)
+            Gs = self.to_dgl(struct, strained_lat, data_idx)
         elif self.graph_object == 'pyg':
-            Gs = self.to_pyg(struct, strained_lat)
+            Gs = self.to_pyg(struct, strained_lat, data_idx)
         Gs.ij, Gs.system = tensor_idx, system
         Gs.mat_id = 'material_' + f'{data_idx:03d}'
 
