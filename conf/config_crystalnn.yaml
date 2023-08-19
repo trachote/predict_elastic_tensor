@@ -1,12 +1,12 @@
 dataset:
-  edge_style: 'cell_radius'
-  max_edge_size: 2000
+  edge_style: 'crystalnn'
+  max_edge_size: 30
 
 model:
   task_loss: 'l1_loss'
   weigth_class_loss: 10
   num_teacher_forcing: 10
-  batch_size: 2 
+  batch_size: 32 
   num_epochs: 501
 
   graph_params:
@@ -34,7 +34,7 @@ model:
   conv:
     num_layers: 4 
     atom_feat_size: 4
-    num_channels: 32 
+    num_channels: 8 
     num_nlayers: 1
     num_degrees: 4 
     num_bonds: 1
