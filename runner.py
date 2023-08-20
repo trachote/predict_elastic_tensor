@@ -103,13 +103,10 @@ class Runner:
 
     def _save_checkpoint(self, model_ckpt, ckpt_path, epoch):
         new_ckpt_path = f"{self.cfg.out_dir}/epoch={epoch}={self.cfg.suffix}.ckpt"
-        #if new_ckpt_path != ckpt_path:
         if ckpt_path and os.path.exists(ckpt_path):
             os.remove(ckpt_path)        
         torch.save(model_ckpt, new_ckpt_path)
-        print(f"saved {epoch} checkpoint: ", new_ckpt_path)
-        #print("\tmodel checkpoint train loss: ", model_ckpt['train_loss'])
-        #print("\tmodel checkpoint val loss: ", model_ckpt['val_loss'])
+        #print(f"saved checkpoint at epoch [{epoch}]: ", new_ckpt_path)
         return new_ckpt_path
 
     def _get_checkpoint_dict(self, epoch, best_val_loss, best_val_epoch):
@@ -169,16 +166,14 @@ class Runner:
     def train_step(self, epoch, dataloader, train_size):
         avgloss, acc_tot = np.zeros(3), np.zeros(3)
         num_iters = len(dataloader)
-        dataloader = iter(dataloader)
         teacher_forcing = True if epoch < self.num_teacher_forcing else False
-
+        
         self.model.train()
-        for i in range(num_iters):
-            data = next(dataloader)
+        for i, data in enumerate(dataloader):
             g = data[0].to(self.device)
             y = data[1].to(self.device)
             mpid, ij, systems = data[2:]
-            ng = g.batch_size 
+            ng = g.batch_size
 
             gt_labels = ij_labels(ij, systems, 'torch').to(self.device)
             ij_index = rand_ij_index(gt_labels).to(self.device)
@@ -198,22 +193,20 @@ class Runner:
             self.scheduler.step(epoch + i / num_iters)
 
             if i%100 == 0:
-                print(f"[{epoch}|{i}]: reg {loss_reg:.4f}, ml {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
+                print(f"[{epoch}|{i}]: reg {loss_reg:.4f}, class {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
 
         avgloss /= train_size
-        acc /= train_size
+        acc_tot /= train_size
         return avgloss, acc_tot
 
     @torch.no_grad()
     def eval_step(self, epoch, dataloader, eval_size, mode):
         avgloss, acc_tot = np.zeros(3), np.zeros(3)
         num_iters = len(dataloader)
-        dataloader = iter(dataloader)
         teacher_forcing = True if epoch < self.num_teacher_forcing else False
 
         self.model.eval()
-        for i in range(num_iters):
-            data = next(dataloader)
+        for i, data in enumerate(dataloader):
             g = data[0].to(self.device)
             y = data[1].to(self.device)
             mpid, ij, systems = data[2:]
@@ -232,7 +225,7 @@ class Runner:
             acc_tot += acc * ng
 
             if i%100 == 0:
-                print(f"...[{epoch}|{i}|{mode}]: reg {loss_reg:.4f}, ml {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
+                print(f"...[{epoch}|{i}|{mode}]: reg {loss_reg:.4f}, class {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
 
         avgloss /= eval_size
         acc_tot /= eval_size
@@ -265,14 +258,13 @@ class Runner:
                 model_ckpt = self._get_checkpoint_dict(epoch, best_val_reg_loss, best_val_epoch)
                 best_ckpt_path = self._save_checkpoint(model_ckpt, best_ckpt_path, 'best')            
             model_ckpt = self._get_checkpoint_dict(epoch, best_val_reg_loss, best_val_epoch)
-            ckpt_path = self._save_checkpoint(model_ckpt, ckpt_path, epoch)  
+            ckpt_path = self._save_checkpoint(model_ckpt, ckpt_path, epoch) 
 
             toc_epoch = time.perf_counter()
-            print(f"Summary epoch {epoch}:")
-            print(f"[train|{epoch}]: reg {train_loss[0]:.4f}, ml {train_loss[1]:.4f}, tot {train_loss[2]:.4f}, acc0 {train_acc[0]:.4f}, acc1 {train_acc[1]:.4f}, acc {train_acc[2]:.4f}")
-            print(f"[val|{epoch}]: reg {val_loss[0]:.4f}, ml {val_loss[1]:.4f}, tot {val_loss[2]:.4f}, acc0 {val_acc[0]:.4f}, acc1 {val_acc[1]:.4f}, acc {val_acc[2]:.4f}")
-            print(f"best_val_reg_loss: {best_val_reg_loss:.4f}")
-            print(f'{self.device} run time [{epoch}]: {toc_epoch - tic_epoch} s \n')
+            self.epoch_summary(epoch, train_loss, train_acc, val_loss, val_acc, 
+                               best_val_reg_loss, best_val_epoch)
+            print(f'{self.device} run time: {(toc_epoch - tic_epoch):.4f} s')
+            print("----------\n")
 
             if self._early_stopping(epoch, best_val_epoch):
                 print(f'Training has been early stopped at epoch {epoch}.')
@@ -357,3 +349,16 @@ class Runner:
 
         print("Finish prediction")
         return uij, cij
+
+    def epoch_summary(self, epoch, train_loss, train_acc, val_loss, val_acc, 
+                      best_val_reg_loss, best_val_epoch):        
+        print("----------")
+        print(f">>>>> Summary epoch {epoch}:")
+        print(f"Train loss [{epoch}]: reg {train_loss[0]:.4f}, class {train_loss[1]:.4f}, tot {train_loss[2]:.4f}")
+        print(f"Val loss   [{epoch}]: reg {val_loss[0]:.4f}, class {val_loss[1]:.4f}, tot {val_loss[2]:.4f}") 
+        print("----------")
+        print(f"Train acc  [{epoch}]: <0> {train_acc[0]:.4f}, <1> {train_acc[1]:.4f}, all {train_acc[2]:.4f}")
+        print(f"Val acc    [{epoch}]: <0> {val_acc[0]:.4f}, <1> {val_acc[1]:.4f}, all {val_acc[2]:.4f}")
+        print("----------")
+        print(f"Min val    [{best_val_epoch}]: reg {best_val_reg_loss:.4f}")
+        
