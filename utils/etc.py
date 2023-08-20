@@ -56,8 +56,8 @@ def get_epsilon(strain):
 
 def data_alignment(struct, y):
         lat = struct.lattice.matrix
-        bravias = SpacegroupAnalyzer(struct).get_crystal_system()
-        if bravias == 'tetragonal':
+        system = SpacegroupAnalyzer(struct).get_crystal_system()
+        if system == 'tetragonal':
             if y[0][0] == y[1][1]:
                 ls = [0, 1, 2, 3, 4, 5]
             elif y[0][0] == y[2][2]:
@@ -69,7 +69,7 @@ def data_alignment(struct, y):
             ls = np.meshgrid(ls, ls)
             return y[ls[0], ls[1]]
         
-        elif bravias == 'orthorhombic':
+        elif system == 'orthorhombic':
             lat = [lat[0][0], lat[1][1], lat[2][2]]
             b = lat.index(max(lat))
             c = lat.index(min(lat))
@@ -443,7 +443,7 @@ def ijdict_laue(mode='train', target='all'):
     return ij_dict 
 
 
-def ij_labels(ij, bravais, dtype='numpy'):
+def ij_labels(ij, systems, dtype='numpy'):
     idx = [i*5 + j - sum(list(range(i))) for i, j in ij]
     sym = {'cubic': np.array([set([0, 6, 11]), set([1, 2, 7]), 
                               set([3, 9 ,14]), set([4, 5, 8, 10, 12, 13]), 
@@ -468,7 +468,7 @@ def ij_labels(ij, bravais, dtype='numpy'):
            'monoclinic': np.array([set([i]) for i in range(21)]),
            'triclinic': np.array([set([i]) for i in range(21)])
           }
-    masks = [list(sym[b][[s.intersection([i]) != set([]) for s in sym[b]]].item()) for i, b in zip(idx, bravais)]
+    masks = [list(sym[b][[s.intersection([i]) != set([]) for s in sym[b]]].item()) for i, b in zip(idx, systems)]
     labels = np.zeros((len(ij), 21))
     for l, m in zip(labels, masks):
         l[m] = 1
