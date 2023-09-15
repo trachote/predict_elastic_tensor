@@ -32,7 +32,7 @@ class Runner:
                             n_heads=hparams.num_heads,
                             pooling=hparams.pooling,
                             embed_dim=hparams.embed_dim,
-                            mid_dim=hparams.radial_dim)
+                            radial_dim=hparams.radial_dim)
         self.model = self.model.to(self.device)
         self.optimizer = Adam(self.model.parameters(), lr=opt.lr, weight_decay=opt.weight_decay)
         self.scheduler = CosineAnnealingWarmRestarts(self.optimizer,
