@@ -158,9 +158,9 @@ class MPtoGraph(Dataset):
 
     def _graph_elements(self, struct, lat, idx):
         if self.frac_coord:
-            coords = [site.frac_coords for site in struct.sites]
+            coords = [site.frac_coords.tolist() for site in struct.sites]
         else:
-            coords = [item.coords for item in struct.sites]
+            coords = [item.coords.tolist() for item in struct.sites]
         coords = torch.tensor(coords, dtype=torch.float)
 
         if self.edge_style == 'crystalnn':
@@ -193,8 +193,8 @@ class MPtoGraph(Dataset):
         feat = self.get_atom_feats(elems)
         z = torch.tensor([elem.Z for elem in elems], dtype=torch.long)
         edge_attr = self._weight_fn(dist, sites=elems, src=src, dst=dst).float()
-        cell = torch.einsum('ij,ni->nj', torch.tensor(struct.lattice.matrix.tolist()).float(), T)
-        return coords, feat, z, src, dst, dr, edge_attr, cell
+        T = torch.einsum('ij,ni->nj', torch.tensor(struct.lattice.matrix.tolist()).float(), T)
+        return coords, feat, z, src, dst, dr, edge_attr, T
 
     def to_dgl(self, struct, lat, idx):
         pos, feat, z, src, dst, dr, w, T = self._graph_elements(struct, lat, idx)
@@ -202,7 +202,7 @@ class MPtoGraph(Dataset):
         G.ndata['x'] = pos
         G.ndata['f'] = feat
         G.ndata['z'] = z
-        G.edata['d'] = dr
+        G.edata['d'] = dr + T
         G.edata['w'] = w
         return G
 
