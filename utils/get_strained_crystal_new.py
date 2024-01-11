@@ -217,7 +217,7 @@ class MPtoGraph(Dataset):
         return ijlist[n]
 
     def strained(self, struct, eij):
-        strained_lat = np.matmul(eij, struct.lattice.matrix)
+        strained_lat = np.einsum('jk,ij->ik', eij, struct.lattice.matrix)
         strained_str = struct.copy()
         strained_str.lattice = Lattice(strained_lat)
         return strained_str, torch.from_numpy(strained_lat).float()
