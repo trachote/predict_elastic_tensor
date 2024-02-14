@@ -10,39 +10,22 @@ from torch import nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
-from model import SE3Net
+from model import StrainTensorNet
 from utils.datamodule import get_loaders, get_eval_loader
 from utils.etc import *
 
 class Runner:
-    def __init__(self, cfg, verbose=True):
-        hparams = cfg.model.conv
-        opt = cfg.otim.optimizer
-        sch = cfg.otim.scheduler
+    def __init__(self, cfg):
+        self.hparams = cfg.model.conv
+        self.opt = cfg.otim.optimizer
+        self.sch = cfg.otim.scheduler
         self.cfg = cfg
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = SE3Net(hparams.num_layers,
-                            hparams.atom_feat_size,
-                            hparams.num_channels,
-                            num_nlayers=hparams.num_nlayers,
-                            num_degrees=hparams.num_degrees,
-                            edge_dim=hparams.num_bonds,
-                            div=hparams.div,
-                            n_heads=hparams.num_heads,
-                            pooling=hparams.pooling,
-                            embed_dim=hparams.embed_dim,
-                            radial_dim=hparams.radial_dim)
-        self.model = self.model.to(self.device)
-        self.optimizer = Adam(self.model.parameters(), lr=opt.lr, weight_decay=opt.weight_decay)
-        self.scheduler = CosineAnnealingWarmRestarts(self.optimizer,
-                                                     sch.T_0,
-                                                     T_mult=sch.T_mult,
-                                                     eta_min=sch.eta_min)
 
         self.criterion_reg = self.loss_fn(cfg.model.task_loss)
         self.criterion_class = self.loss_fn('bce_loss')
-        self.weigth_class_loss = cfg.model.weigth_class_loss
+        self.weight_class_loss = cfg.model.weight_class_loss
 
         self.num_teacher_forcing = cfg.model.num_teacher_forcing
         self.max_edge_size = cfg.dataset.max_edge_size
@@ -50,10 +33,7 @@ class Runner:
         self.num_epochs = cfg.model.num_epochs
         self.graph_params = cfg.model.graph_params
 
-        if verbose:
-            print(self.model)
-    
-    def _load_checkpoint(self, mode='train'):
+    def _load_checkpoint(self, model, optimizer=None, scheduler=None, mode='train'):
         ckpts = list(glob.glob(f'{self.cfg.out_dir}/*={self.cfg.suffix}.ckpt'))  
         
         if len(ckpts) > 0:
@@ -71,15 +51,15 @@ class Runner:
                 ckpt = torch.load(ckpt, map_location=torch.device('cpu'))
             
             print(f">>>>> Update model from checkpoint:") 
-            self.model.load_state_dict(ckpt['model_state_dict'])
+            model.load_state_dict(ckpt['model_state_dict'])
 
             if mode == 'train':
                 try:
-                    self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+                    optimizer.load_state_dict(ckpt['optimizer_state_dict'])
                 except:
                     print("ERROR: Loading optimizer")
                 try:
-                    self.scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+                    scheduler.load_state_dict(ckpt['scheduler_state_dict'])
                 except:
                     print("ERROR: Loading scheduler")                
                    
@@ -91,15 +71,18 @@ class Runner:
             print(f"revived epoch: {ckpt['epoch']}")
             print(f"best_val_reg_loss: {best_val_loss}")
             print(f"best_val_epoch: {best_val_epoch}\n")
-            print(f">>>>> CONTINUE TRAINING")
-            
+            if mode == "train":
+                print(">>>>> CONTINUE TRAINING")
+            else:
+                print(f">>>>> {mode.upper()}")
+
         else:
             print(f">>>>> NEW TRAINING")
             start_epoch = 0
             best_val_loss, best_val_epoch = 1e12, -1
             ckpt_path, best_ckpt_path = None, None
                 
-        return start_epoch, (best_val_loss, best_val_epoch), (ckpt_path, best_ckpt_path)
+        return (model, optimizer, scheduler), start_epoch, (best_val_loss, best_val_epoch), (ckpt_path, best_ckpt_path)
 
     def _save_checkpoint(self, model_ckpt, ckpt_path, epoch):
         new_ckpt_path = f"{self.cfg.out_dir}/epoch={epoch}={self.cfg.suffix}.ckpt"
@@ -109,11 +92,11 @@ class Runner:
         #print(f"saved checkpoint at epoch [{epoch}]: ", new_ckpt_path)
         return new_ckpt_path
 
-    def _get_checkpoint_dict(self, epoch, best_val_loss, best_val_epoch):
+    def _get_checkpoint_dict(self, model, optimizer, scheduler, epoch, best_val_loss, best_val_epoch):
         model_ckpt = {
-                'model_state_dict': copy.deepcopy(self.model.state_dict()), 
-                'optimizer_state_dict': copy.deepcopy(self.optimizer.state_dict()), 
-                'scheduler_state_dict': copy.deepcopy(self.scheduler.state_dict()),
+                'model_state_dict': copy.deepcopy(model.state_dict()), 
+                'optimizer_state_dict': copy.deepcopy(optimizer.state_dict()), 
+                'scheduler_state_dict': copy.deepcopy(scheduler.state_dict()),
                 'epoch': epoch, 
                 'best_val_loss': best_val_loss,
                 'best_val_epoch': best_val_epoch,
@@ -129,18 +112,19 @@ class Runner:
                     'train_tot_loss': train_loss[2].item(),
                     'train_acc0': train_acc[0].item(),
                     'train_acc1': train_acc[1].item(),
-                    'train_acc': train_acc[2].item(),
+                    'train_acc': train_acc[2],
                     'val_reg_loss': val_loss[0].item(),
                     'val_class_loss': val_loss[1].item(),
                     'val_tot_loss': val_loss[2].item(),
                     'val_acc0': val_acc[0].item(),
                     'val_acc1': val_acc[1].item(),
-                    'val_acc': val_acc[2].item()
+                    'val_acc': val_acc[2],
                    }  
         
-        with open(self.cfg.out_dir + "/training_metrics.json", 'a') as f:
-            f.write(json.dumps({k: v for k, v in log_dict.items()}))
-            f.write('\r\n')
+        with open(self.cfg.out_dir + "/training_metrics.json", "a") as f:
+            results = {k: v for k, v in log_dict.items()}
+            json.dump(results, f)
+            f.write("\n")
 
     def _early_stopping(self, epoch, best_val_epoch):
         if epoch - best_val_epoch > self.cfg.early_stopping_patience:
@@ -163,73 +147,118 @@ class Runner:
         acc1 = ((label > 0.5) & (gt_label == 1)).sum().item() / (gt_label == 1).sum().item()
         return np.array([acc0, acc1, acc]) 
 
-    def train_step(self, epoch, dataloader, train_size):
-        avgloss, acc_tot = np.zeros(3), np.zeros(3)
+    def train_step(self, epoch, model, dataloader, optimizer, scheduler, train_size, df):
+        model.train()
+        avgloss, acc = 0., [0.,0.,0.]
+        avgloss = np.zeros(3)
         num_iters = len(dataloader)
+        ys, outs = [], []
+        mpids, cijs, systems = [], [], []
+        dataloader = iter(dataloader)
         teacher_forcing = True if epoch < self.num_teacher_forcing else False
-        
-        self.model.train()
-        for i, data in enumerate(dataloader):
+        print(f"teacher: {teacher_forcing}")
+        for i in range(num_iters):
+            data = next(dataloader)
             g = data[0].to(self.device)
             y = data[1].to(self.device)
-            mpid, ij, systems = data[2:]
-            ng = g.batch_size
-
-            gt_labels = ij_labels(ij, systems, 'torch').to(self.device)
-            ij_index = rand_ij_index(gt_labels).to(self.device)
-            assert gt_labels.shape == ij_index.shape
-
-            pred, label = self.model(g, ij_index, gt_labels, teacher_forcing)
+            mpid, ij, crystal_systems = data[2:] # the last item in the tuple is crystal systems.
+            
+            crystal_systems = df.loc[mpid]['spacegroup.crystal_system'].tolist()
+            gt_label = ij_labels(ij, crystal_systems, 'torch').to(self.device)
+            #ij_index = ij_labels(ij, ['triclinic']*bs, 'torch').to(self.device)
+            ij_index = rand_ij_index(gt_label).to(self.device)
+            assert gt_label.shape == ij_index.shape
+    
+            # run model forward and compute loss
+            pred, label = model(g, ij_index, gt_label, teacher_forcing)
             loss_reg = self.criterion_reg(pred, y)
-            loss_class = self.criterion_class(label, gt_labels)
-            loss = loss_reg + self.weigth_class_loss * loss_class
-            avgloss += np.array([loss_reg.detach().item(), loss_class.detach().item(), loss.detach().item()]) * ng
-            acc = self.get_acc(label, gt_labels, ng)
-            acc_tot += acc * ng
-
-            self.optimizer.zero_grad()
+            loss_class = self.criterion_class(label, gt_label)
+            loss = loss_reg + self.weight_class_loss * loss_class
+            #rl = loss * std 
+            #avgloss += loss * y.shape[0]
+            avgloss += np.array([loss_reg.detach().item(), loss_class.detach().item(), loss.detach().item()]) * y.shape[0]
+    
+            # backprop
+            optimizer.zero_grad()
             loss.backward()
-            self.optimizer.step()
-            self.scheduler.step(epoch + i / num_iters)
-
-            if i%100 == 0:
-                print(f"[{epoch}|{i}]: reg {loss_reg:.4f}, class {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
-
+            optimizer.step()
+            ng = y.shape[0]
+            correct = (label > 0.5).eq(gt_label).sum().item() / 21 / ng
+            correct0 = ((label<=0.5) & (gt_label==0)).sum().item() / (gt_label==0).sum() 
+            correct1 = ((label>0.5) & (gt_label==1)).sum().item() / (gt_label==1).sum() 
+            acc[2] += correct * ng
+            acc[0] += correct0 * ng
+            acc[1] += correct1 * ng
+            
+            if i%100==0:
+                pass #print(f"[{epoch}|{i}]: reg {loss_reg:.4f}, ml {loss_class:.4f}, tot {loss:.4f}, acc0 {correct0:.4f}, acc1 {correct1:.4f} acc {correct:.4f}")
+            scheduler.step(epoch + i / num_iters)
+            ys += y.cpu().tolist()
+            outs += pred.cpu().tolist()
+            mpids += mpid
+            cijs += ij
+            systems += crystal_systems
+        
         avgloss /= train_size
-        acc_tot /= train_size
-        return avgloss, acc_tot
+        acc = [a/train_size for a in acc]
+        #append_hist(ys, outs, avgloss, mpids, cijs, s_tracks, 'train')
+        
+        #print(f"[train|{epoch}]]: {avgloss.round(4)}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f}, acc {acc[2]:.4f}")
+        
+        return avgloss, acc
 
-    @torch.no_grad()
-    def eval_step(self, epoch, dataloader, eval_size, mode):
-        avgloss, acc_tot = np.zeros(3), np.zeros(3)
+    def eval_step(self, epoch, model, dataloader, eval_size, mode, df):
+        model.eval()
+        avgloss, acc = 0., [0.,0.,0.]
+        avgloss = np.zeros(3)
+        ys, outs = [], []
+        mpids, cijs, systems = [], [], []
         num_iters = len(dataloader)
+        dataloader = iter(dataloader)
         teacher_forcing = True if epoch < self.num_teacher_forcing else False
-
-        self.model.eval()
-        for i, data in enumerate(dataloader):
-            g = data[0].to(self.device)
-            y = data[1].to(self.device)
-            mpid, ij, systems = data[2:]
-            ng = g.batch_size
-
-            gt_labels = ij_labels(ij, systems, 'torch').to(self.device)
-            ij_index = ij_labels(ij, ['triclinic'] * ng, 'torch').to(self.device)
-            assert gt_labels.shape == ij_index.shape
-
-            pred, label = self.model(g, ij_index, gt_labels, teacher_forcing)
-            loss_reg = self.criterion_reg(pred, y)
-            loss_class = self.criterion_class(label, gt_labels)
-            loss = loss_reg + self.weigth_class_loss * loss_class
-            avgloss += np.array([loss_reg.detach().item(), loss_class.detach().item(), loss.detach().item()]) * ng
-            acc = self.get_acc(label, gt_labels, ng)
-            acc_tot += acc * ng
-
-            if i%100 == 0:
-                print(f"...[{epoch}|{i}|{mode}]: reg {loss_reg:.4f}, class {loss_class:.4f}, tot {loss:.4f}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f} acc {acc[2]:.4f}")
-
-        avgloss /= eval_size
-        acc_tot /= eval_size
-        return avgloss, acc_tot
+    
+        with torch.no_grad(): 
+            for i in range(num_iters):
+                data = next(dataloader)
+                g = data[0].to(self.device)
+                y = data[1].to(self.device)
+                mpid, ij, _ = data[2:] # the last item in the tuple is crystal systems.
+                
+                crystal_systems = df.loc[mpid]['spacegroup.crystal_system'].tolist()
+                gt_label = ij_labels(ij, crystal_systems, 'torch').to(self.device)
+                ij_index = ij_labels(ij, ['triclinic']*self.bs*2, 'torch').to(self.device)
+                assert gt_label.shape == ij_index.shape
+    
+                # run model forward and compute loss
+                pred, label = model(g, ij_index, gt_label, teacher_forcing)
+                loss_reg = self.criterion_reg(pred, y)
+                loss_class = self.criterion_class(label, gt_label)
+                loss = loss_reg + self.weight_class_loss * loss_class
+                #rl = loss * std
+                #avgloss += loss * y.shape[0]
+                avgloss += np.array([loss_reg.detach().item(), loss_class.detach().item(), loss.detach().item()]) * y.shape[0]
+                ng = y.shape[0]
+                correct = (label > 0.5).eq(gt_label).sum().item() / 21 / ng
+                correct0 = ((label<=0.5) & (gt_label==0)).sum().item() / (gt_label==0).sum() 
+                correct1 = ((label>0.5) & (gt_label==1)).sum().item() / (gt_label==1).sum() 
+                acc[2] += correct * ng
+                acc[0] += correct0 * ng
+                acc[1] += correct1 * ng
+   
+                if i%100==0:
+                    pass #print(f"...[{epoch}|{i}|{mode}]: reg {loss_reg:.4f}, ml {loss_class:.4f}, tot {loss:.4f}, acc0 {correct0:.4f}, acc1 {correct1:.4f}, acc {correct:.4f}")
+                ys += y.cpu().tolist()
+                outs += pred.cpu().tolist()
+                mpids += mpid
+                cijs += ij
+                systems += crystal_systems 
+    
+            avgloss /= eval_size
+            acc = [a/eval_size for a in acc]
+            #append_hist(ys, outs, avgloss, mpids, cijs, s_tracks, mode)
+           
+            #print(f"...[{mode}|{epoch}]: {avgloss.round(4)}, acc0 {acc[0]:.4f}, acc1 {acc[1]:.4f}, acc {acc[2]:.4f}")
+        return avgloss, acc
 
     def train(self, train_df, val_df):
         tic = time.perf_counter()
@@ -239,25 +268,46 @@ class Runner:
         train_loader, val_loader = loaders
         train_size, val_size = sizes
         torch.save(stats, f'{self.cfg.out_dir}/stats_{self.cfg.suffix}.pt') # save mean and std
-        
         print(f'saved directory: {self.cfg.out_dir}, saved name: {self.cfg.suffix}')
-        start_epoch, bests, paths = self._load_checkpoint('train')
+        
+        model = StrainTensorNet(**self.hparams)
+        optimizer = Adam(model.parameters(), **self.opt)
+        scheduler = CosineAnnealingWarmRestarts(optimizer, **self.sch)
+        
+        models, start_epoch, bests, paths = self._load_checkpoint(model, 
+                                                            optimizer, 
+                                                            scheduler, 
+                                                            'train')
+        model, optimizer, scheduler = models
         best_val_reg_loss, best_val_epoch = bests
         ckpt_path, best_ckpt_path = paths
+        print(model)
+        model.to(self.device)
 
         for epoch in range(start_epoch, self.num_epochs):
             tic_epoch = time.perf_counter()
             
-            train_loss, train_acc = self.train_step(epoch, train_loader, train_size)
-            val_loss, val_acc = self.eval_step(epoch, val_loader, val_size, 'val')
+            train_loss, train_acc = self.train_step(epoch, model, train_loader, 
+                                                    optimizer, scheduler, train_size, train_df)
+            val_loss, val_acc = self.eval_step(epoch, model, val_loader, val_size, 'val', val_df)
 
             self._logging(epoch, train_loss, train_acc, val_loss, val_acc)  
             if val_loss[0] <= best_val_reg_loss:
                 best_val_reg_loss = val_loss[0]
                 best_val_epoch = epoch
-                model_ckpt = self._get_checkpoint_dict(epoch, best_val_reg_loss, best_val_epoch)
+                model_ckpt = self._get_checkpoint_dict(model, 
+                                    optimizer, 
+                                    scheduler, 
+                                    epoch, 
+                                    best_val_reg_loss, 
+                                    best_val_epoch)
                 best_ckpt_path = self._save_checkpoint(model_ckpt, best_ckpt_path, 'best')            
-            model_ckpt = self._get_checkpoint_dict(epoch, best_val_reg_loss, best_val_epoch)
+            model_ckpt = self._get_checkpoint_dict(model,
+                                optimizer,
+                                scheduler,
+                                epoch, 
+                                best_val_reg_loss, 
+                                best_val_epoch)
             ckpt_path = self._save_checkpoint(model_ckpt, ckpt_path, epoch) 
 
             toc_epoch = time.perf_counter()
@@ -301,8 +351,10 @@ class Runner:
         from tqdm import tqdm
 
         # Load model
-        self._load_checkpoint('predict')
-        self.model.eval()
+        model = StrainTensorNet(**self.hparams)
+        self._load_checkpoint(model, mode='predict')
+        model.to(self.device)
+        model.eval()
 
         # Dataloader
         if limit_edge_size:
@@ -317,18 +369,24 @@ class Runner:
         print(f"Number of crystal structures: {len(pred_df)}")
         for n, data in tqdm(enumerate(dataloader), total=len(dataloader), desc='Uij (meV/atom)'):
             g = data[0].to(self.device)
-            mat_id, ij, systems = data[2:]
+            mat_id, ij, _ = data[2:]
             ng = g.batch_size
-            gt_labels = ij_labels(ij, systems, 'torch').to(self.device)
+            
             ij_index = ij_labels(ij, ['triclinic'] * ng, 'torch').to(self.device)
+            forced_labels = None
+            teacher_forcing = False
+            
             if use_gt_label:
-                forced_labels = gt_labels
-                teacher_forcing = True
-            else:
-                forced_labels = None
-                teacher_forcing = False
+                if ("crystal_system" in pred_df.keys()) or ("spacegroup.crystal_system" in pred_df.keys()):
+                    systems = pred_df.loc[mat_id]['spacegroup.crystal_system'].tolist()
+                    gt_labels = ij_labels(ij, systems, 'torch').to(self.device)
+                    forced_labels = gt_labels
+                    teacher_forcing = True
+                else:
+                    print(f"use_gt_label is True, but crystal systems are not provided in the dataframe.")
+                    break
 
-            pred, label = self.model(g, ij_index, forced_labels, teacher_forcing)
+            pred, label = model(g, ij_index, forced_labels, teacher_forcing)
             pred, label = pred.cpu().numpy(), label.cpu().numpy()
             if self.graph_params.train.normalize:
                 pred = pred * std + mean
