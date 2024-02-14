@@ -1,7 +1,7 @@
 import dgl
 #import pandas as pd
 from utils.etc import ijdict_symmetric
-from utils.get_strained_crystal_new import MPtoGraph
+from utils.get_strained_crystal import MPtoGraph
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, ConcatDataset

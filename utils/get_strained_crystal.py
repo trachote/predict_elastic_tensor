@@ -17,7 +17,6 @@ from utils.get_edges import Edges
 
 class MPtoGraph(Dataset):
     def __init__(self, df, target,
-                 shuffle=False,
                  strain=2,
                  weight='ones',
                  one_hot_size=95,
@@ -59,9 +58,15 @@ class MPtoGraph(Dataset):
             with open(file, 'rb') as fp:
                 self.crystalnn_edges = pickle.load(fp)
 
-        if shuffle:
-            self.df = self.df.sample(frac=1)
-
+        if 'polar' in self.atom_feats:
+            """
+            P. Schwerdtfeger and J. K. Nagle, 2018 
+            table of static dipole polarizabilities of 
+            the neutral elements in the pe-riodic table, 
+            Molecular Physics 117, 1200 (2019)
+            """
+            self.polar = pd.read_csv(os.path.join(self.dir_path, 'elemental_polarizability.csv'))
+         
         self.ijkey = {i*6-sum([k for k in range(i+1)])+j: (i, j) 
                       for i in range(6) for j in range(i, 6)} # {0: (0,0), 1: (0,1), ..., 20: (5,5)}
 
@@ -145,14 +150,7 @@ class MPtoGraph(Dataset):
         feat += [torch.tensor([[[elem.X]] for elem in elems])] if 'X' in self.atom_feats else []
         feat += [torch.tensor([[[elem.atomic_radius if elem.atomic_radius != None else elem.atomic_radius_calculated]] for elem in elems])] if 'radius' in self.atom_feats else []
         if 'polar' in self.atom_feats:
-            """
-            P. Schwerdtfeger and J. K. Nagle, 2018 
-            table of static dipole polarizabilities of 
-            the neutral elements in the pe-riodic table, 
-            Molecular Physics 117, 1200 (2019)
-            """
-            polar = pd.read_csv(os.path.join(self.dir_path, 'elemental_polarizability.csv'))
-            feat.append(torch.tensor([[[polar[polar['Z'] == elem.number]['Polarizability'].item()]] for elem in elems]))
+            feat.append(torch.tensor([[[self.polar[self.polar['Z'] == elem.number]['Polarizability'].item()]] for elem in elems]))
         feat = torch.cat(feat, dim=1).float()
         return feat
 
@@ -194,7 +192,7 @@ class MPtoGraph(Dataset):
         z = torch.tensor([elem.Z for elem in elems], dtype=torch.long)
         edge_attr = self._weight_fn(dist, sites=elems, src=src, dst=dst).float()
         T = torch.einsum('ij,ni->nj', torch.tensor(struct.lattice.matrix.tolist()).float(), T)
-        return coords, feat, z, src, dst, dr, edge_attr, T
+        return coords, feat, z, src, dst, dr, edge_attr, T 
 
     def to_dgl(self, struct, lat, idx):
         pos, feat, z, src, dst, dr, w, T = self._graph_elements(struct, lat, idx)
@@ -202,7 +200,7 @@ class MPtoGraph(Dataset):
         G.ndata['x'] = pos
         G.ndata['f'] = feat
         G.ndata['z'] = z
-        G.edata['d'] = dr + T
+        G.edata['d'] = dr #+ T
         G.edata['w'] = w
         return G
 
@@ -224,7 +222,7 @@ class MPtoGraph(Dataset):
 
     def __getitem__(self, idx):
         data_idx = idx % self.data_len
-        struct = Structure.from_str(self.df['cif'][data_idx], 'cif')
+        struct = Structure.from_str(self.df['cif'][data_idx], 'cif', primitive=True)
         if self.con_cell:
             struct = SpacegroupAnalyzer(struct).get_conventional_standard_structure()
             ## an a axis of the hexagonal lattice will be aligned on x axis by using get_refined_structure.
@@ -245,7 +243,8 @@ class MPtoGraph(Dataset):
         elif self.graph_object == 'pyg':
             Gs = self.to_pyg(struct, strained_lat, data_idx)
         Gs.ij, Gs.system = tensor_idx, system
-        Gs.mat_id = 'material_' + f'{data_idx:03d}'
+        Gs.mat_id = self.df.index[data_idx]
+        # Gs.mat_id = 'material_' + f'{data_idx:03d}'
 
         if self.task == 'train':
             y = self.get_target(data_idx)
@@ -255,8 +254,7 @@ class MPtoGraph(Dataset):
                 y = - self.mean / self.std
             else:
                 y = y[tensor_idx[0]][tensor_idx[1]]
-            mat_id = self.df.index[data_idx]
-            Gs.mat_id, Gs.pg = mat_id, pg
+            Gs.pg = pg
         elif self.task == 'eval':
             y = 0.
 
